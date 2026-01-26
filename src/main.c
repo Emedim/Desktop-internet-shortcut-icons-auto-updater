@@ -15,11 +15,17 @@ int main(void)
 
     if (FAILED(desktopPathResult))
     {
-        printf("SHGetKnownFolderPath failed, HRESULT = 0x%08X\n", (unsigned)desktopPathResult);
+        MessageBoxA
+        (
+            NULL,
+            "Could not find path to desktop",
+            NULL,
+            MB_OK
+        );
         return 1;
     }
     wprintf(L"Desktop path: %ls\n", desktopPath);
-    CoTaskMemFree(desktopPath);     //освобождение пемяти из com-кучи
 
+    CoTaskMemFree(desktopPath);     //освобождение пемяти из com-кучи из-под строки с абсолютным путём до рабочего стола
     return 0;
 }
