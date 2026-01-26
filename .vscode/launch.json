@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug C (MSVC)",
+      "type": "cppvsdbg",
+      "request": "launch",
+
+      "program": "${workspaceFolder}\\bin\\app.exe",
+      "cwd": "${workspaceFolder}",
+
+      "args": [],             // параметры главной функции отлаживаемой программы
+      "stopAtEntry": false,   // остановиться ли сразу с первой строчки кода при отладке
+
+      "preLaunchTask": "build",
+
+      "console": "externalTerminal"   
+    }
+  ]
+}
