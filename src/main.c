@@ -1,31 +1,65 @@
 #include <windows.h>
-#include <shlobj.h>     //SHGetKnownFolderPath
+#include <shlobj.h> //SHGetKnownFolderPath
+
 #include <stdio.h>
+#include <stdbool.h>
+#include <strsafe.h>    //StringCchCatW; StringCchCopyW
+#include <io.h>
+#include <fcntl.h>
 
 int main(void)
 {
+    _setmode(_fileno(stdout), _O_U16TEXT);  //CRT теперь печатает в консоль только в unicode
+
     PWSTR desktopPath = NULL;
-    HRESULT desktopPathResult = SHGetKnownFolderPath
-    (
-        &FOLDERID_Desktop,
-        0,
-        NULL,
-        &desktopPath
-    );
+    HRESULT desktopPathResult = SHGetKnownFolderPath // взять путь до определённой папки
+        (
+            &FOLDERID_Desktop, // рабочий стол
+            0,
+            NULL,
+            &desktopPath);
 
     if (FAILED(desktopPathResult))
     {
-        MessageBoxA
-        (
+        MessageBoxA(
             NULL,
             "Could not find path to desktop",
             NULL,
-            MB_OK
-        );
-        return 1;
+            MB_OK);
+        return -1;
     }
-    wprintf(L"Desktop path: %ls\n", desktopPath);
+    wprintf(L"Desktop path: %ls\n\n", desktopPath);   //показать путь к рабочему 
 
-    CoTaskMemFree(desktopPath);     //освобождение пемяти из com-кучи из-под строки с абсолютным путём до рабочего стола
+    //приведение пути к рабочему столу к виду, пригодному для передачи в FindFirstFileW для поиска файлов на рабочем столе
+    wchar_t searchPath[MAX_PATH];
+    StringCchCopyW(searchPath, MAX_PATH, desktopPath);
+    StringCchCatW(searchPath, MAX_PATH, L"\\*");
+
+    LARGE_INTEGER filesize;
+    WIN32_FIND_DATAW fileData;                                              // информация о файле
+    HANDLE searchingFilesHandle = FindFirstFileW(searchPath, &fileData);    // получить дескриптор поиска и получить первый файл
+    if (INVALID_HANDLE_VALUE == searchingFilesHandle)                       // если дескриптор неверный
+    {
+        wprintf(L"FindFirstFile failed, error = %lu\n", GetLastError());
+        return -1;
+    }
+
+    do
+    {
+        if (fileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        {
+            wprintf(L"Foldr: %ls\n", fileData.cFileName);
+        }
+        else
+        {
+            filesize.LowPart = fileData.nFileSizeLow;
+            filesize.HighPart = fileData.nFileSizeHigh;
+            wprintf(L"File: %ls\n", fileData.cFileName);
+        }
+    }
+    while (FindNextFileW(searchingFilesHandle, &fileData));
+
+    FindClose(searchingFilesHandle); // закрыть дескриптор поска
+    CoTaskMemFree(desktopPath);      // освобождение пемяти из com-кучи из-под строки с абсолютным путём до рабочего стола
     return 0;
 }
