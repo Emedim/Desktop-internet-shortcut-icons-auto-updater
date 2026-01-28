@@ -4,28 +4,35 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <strsafe.h>    //StringCchCatW; StringCchCopyW
+
+//для _setmode(_fileno(stdout), _O_U16TEXT);
 #include <io.h>
 #include <fcntl.h>
 
 int main(void)
 {
-    _setmode(_fileno(stdout), _O_U16TEXT);  //CRT теперь печатает в консоль только в unicode
+    _setmode(_fileno(stdout), _O_U16TEXT);  //CRT теперь печатает в консоль только unicode
 
     PWSTR desktopPath = NULL;
-    HRESULT desktopPathResult = SHGetKnownFolderPath // взять путь до определённой папки
-        (
-            &FOLDERID_Desktop, // рабочий стол
-            0,
-            NULL,
-            &desktopPath);
+    HRESULT desktopPathResult = NULL;
+    desktopPathResult = SHGetKnownFolderPath // взять путь до определённой папки
+    (
+        &FOLDERID_Desktop, // рабочий стол
+        0,
+        NULL,
+        &desktopPath
+    );
 
     if (FAILED(desktopPathResult))
     {
-        MessageBoxA(
+        CoTaskMemFree(desktopPath);
+        MessageBoxA
+        (
             NULL,
             "Could not find path to desktop",
             NULL,
-            MB_OK);
+            MB_OK
+        );
         return -1;
     }
     wprintf(L"Desktop path: %ls\n\n", desktopPath);   //показать путь к рабочему 
@@ -40,7 +47,14 @@ int main(void)
     HANDLE searchingFilesHandle = FindFirstFileW(searchPath, &fileData);    // получить дескриптор поиска и получить первый файл
     if (INVALID_HANDLE_VALUE == searchingFilesHandle)                       // если дескриптор неверный
     {
-        wprintf(L"FindFirstFile failed, error = %lu\n", GetLastError());
+        CoTaskMemFree(desktopPath);
+        MessageBoxA
+        (
+            NULL,
+            "Invalid files searching descriptor value",
+            NULL,
+            MB_OK
+        );
         return -1;
     }
 
@@ -58,6 +72,21 @@ int main(void)
         }
     }
     while (FindNextFileW(searchingFilesHandle, &fileData));
+
+    DWORD dwError = GetLastError();
+    if (dwError != ERROR_NO_MORE_FILES) 
+    {
+        CoTaskMemFree(desktopPath);
+        FindClose(searchingFilesHandle);
+        MessageBoxA
+        (
+            NULL,
+            "Unknown error of searching files",
+            NULL,
+            MB_OK
+        );
+        return -1;
+    }
 
     FindClose(searchingFilesHandle); // закрыть дескриптор поска
     CoTaskMemFree(desktopPath);      // освобождение пемяти из com-кучи из-под строки с абсолютным путём до рабочего стола
