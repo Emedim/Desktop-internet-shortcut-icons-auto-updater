@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <shlobj.h> //SHGetKnownFolderPath
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <strsafe.h>    //StringCchCatW; StringCchCopyW
@@ -9,12 +10,59 @@
 #include <io.h>
 #include <fcntl.h>
 
+void FindCloseCleanupWrap(void *arg)
+{
+    HANDLE *realArg = arg;
+    FindClose(*realArg);
+}
+
+void CoTaskMemFreeCleanupWrap(void *arg)
+{
+    PWSTR *realArg = arg;
+    CoTaskMemFree(*realArg);
+}
+
+typedef struct
+{
+    void (*func)(void *);    //указатель на функцию, принемающую аргумент – указатель на void func(void *arg);
+    void *arg;
+} DeallocatingUnit;
+
+typedef struct CleanupStack
+{
+    DeallocatingUnit deallocatingUnits[4];
+    size_t size;
+} *CleanupStack;
+
+CleanupStack CleanupStackInit()
+{
+    CleanupStack tempPtr = malloc(sizeof(*tempPtr));
+    if (tempPtr) tempPtr->size = 0;     //если malloc вернул не NULL
+    return tempPtr;
+}
+
+void CleanupPush(CleanupStack cs, void (*func)(void *), void *arg)
+{
+    cs->deallocatingUnits[cs->size++] = (DeallocatingUnit){ func, arg };
+}
+void CleanupExecute(CleanupStack cs)
+{
+    while (cs->size > 0)
+    {
+        --cs->size;
+        cs->deallocatingUnits[cs->size].func(cs->deallocatingUnits[cs->size].arg);
+    }
+    free(cs);
+
+}
+
 int main(void)
 {
     _setmode(_fileno(stdout), _O_U16TEXT);  //CRT теперь печатает в консоль только unicode
 
+    CleanupStack cleanupStack = CleanupStackInit();
     PWSTR desktopPath = NULL;
-    HRESULT desktopPathResult = NULL;
+    HRESULT desktopPathResult;
     desktopPathResult = SHGetKnownFolderPath // взять путь до определённой папки
     (
         &FOLDERID_Desktop, // рабочий стол
@@ -22,10 +70,11 @@ int main(void)
         NULL,
         &desktopPath
     );
+    CleanupPush(cleanupStack, CoTaskMemFreeCleanupWrap, &desktopPath);
 
     if (FAILED(desktopPathResult))
     {
-        CoTaskMemFree(desktopPath);
+        CleanupExecute(cleanupStack);
         MessageBoxA
         (
             NULL,
@@ -43,11 +92,11 @@ int main(void)
     StringCchCatW(searchPath, MAX_PATH, L"\\*");
 
     LARGE_INTEGER filesize;
-    WIN32_FIND_DATAW fileData;                                              // информация о файле
-    HANDLE searchingFilesHandle = FindFirstFileW(searchPath, &fileData);    // получить дескриптор поиска и получить первый файл
-    if (INVALID_HANDLE_VALUE == searchingFilesHandle)                       // если дескриптор неверный
+    WIN32_FIND_DATAW fileData;                                                  // информация о файле
+    HANDLE searchingFilesHandle = FindFirstFileW(searchPath, &fileData);        // получить дескриптор поиска и получить первый файл
+    if (INVALID_HANDLE_VALUE == searchingFilesHandle)                           // если дескриптор неверный
     {
-        CoTaskMemFree(desktopPath);
+        CleanupExecute(cleanupStack);
         MessageBoxA
         (
             NULL,
@@ -57,6 +106,7 @@ int main(void)
         );
         return -1;
     }
+    CleanupPush(cleanupStack, FindCloseCleanupWrap, &searchingFilesHandle);
 
     do
     {
@@ -76,8 +126,7 @@ int main(void)
     DWORD dwError = GetLastError();
     if (dwError != ERROR_NO_MORE_FILES) 
     {
-        CoTaskMemFree(desktopPath);
-        FindClose(searchingFilesHandle);
+        CleanupExecute(cleanupStack);
         MessageBoxA
         (
             NULL,
@@ -87,8 +136,7 @@ int main(void)
         );
         return -1;
     }
-
-    FindClose(searchingFilesHandle); // закрыть дескриптор поска
-    CoTaskMemFree(desktopPath);      // освобождение пемяти из com-кучи из-под строки с абсолютным путём до рабочего стола
+    
+    CleanupExecute(cleanupStack);
     return 0;
 }
