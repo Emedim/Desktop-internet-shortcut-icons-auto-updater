@@ -95,8 +95,8 @@ int main(void)
         );
         return -1;
     }
-    wprintf(L"Desktop path: %ls\n\n", desktopPath);   //показать путь к рабочему 
-
+    wprintf(L"Desktop path: %ls\n\n", desktopPath);   //показать путь к рабочему столу
+    
     //приведение пути к рабочему столу к виду, пригодному для передачи в FindFirstFileW для поиска файлов на рабочем столе
     wchar_t searchPath[MAX_PATH];
     if
@@ -133,24 +133,31 @@ int main(void)
     }
     CleanupPush(cleanupStack, FindCloseCleanupWrap, &searchingFilesHandle);
 
-    FILE *file = NULL;
+    FILE *debuging = _wfopen(L"C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug.txt", "w");
     do
     {
         filesize.LowPart = fileData.nFileSizeLow;
         filesize.HighPart = fileData.nFileSizeHigh;
 
-        file = _wfopen(fileData.cFileName, "r");
+        //получить абсолютный путь до ярлыка
+        wchar_t absoluteFilePath[MAX_PATH];
+        StringCchCopyW(absoluteFilePath, MAX_PATH, desktopPath);
+        StringCchCatW(absoluteFilePath, MAX_PATH, L"\\");
+        StringCchCatW(absoluteFilePath, MAX_PATH, fileData.cFileName);
+
+        FILE *file = _wfopen(absoluteFilePath, "r");
         char *buffer = malloc(filesize.QuadPart + 1);   //+1 для NULL-терминатора
-        if(buffer == NULL || file == NULL) continue;
 
         fread(buffer, 1, filesize.QuadPart, file); // Чтение содержимого
         buffer[filesize.QuadPart] = '\0';
-        wprintf(L"File: %ls – \n", fileData.cFileName);
+        fwrite(buffer, 1, filesize.QuadPart, debuging);
+        wprintf(L"File: %ls\n", fileData.cFileName);
 
         free(buffer);
         fclose(file);
     }
     while (FindNextFileW(searchingFilesHandle, &fileData));
+    fclose(debuging);
 
     DWORD dwError = GetLastError();
     if (dwError != ERROR_NO_MORE_FILES) 
