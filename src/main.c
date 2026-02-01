@@ -28,7 +28,7 @@ typedef struct
     void *arg;
 } DeallocatingUnit;
 
-typedef struct CleanupStack
+typedef struct
 {
     DeallocatingUnit deallocatingUnits[4];
     size_t size;
@@ -53,7 +53,6 @@ void CleanupExecute(CleanupStack cs)
         cs->deallocatingUnits[cs->size].func(cs->deallocatingUnits[cs->size].arg);
     }
     free(cs);
-
 }
 
 int main(void)
@@ -61,6 +60,18 @@ int main(void)
     _setmode(_fileno(stdout), _O_U16TEXT);  //CRT теперь печатает в консоль только unicode
 
     CleanupStack cleanupStack = CleanupStackInit();
+    if (cleanupStack == NULL)
+    {
+        MessageBoxA
+        (
+            NULL,
+            "initialization error",
+            NULL,
+            MB_OK
+        );
+        return -1;
+    }
+
     PWSTR desktopPath = NULL;
     HRESULT desktopPathResult;
     desktopPathResult = SHGetKnownFolderPath // взять путь до определённой папки
@@ -88,8 +99,22 @@ int main(void)
 
     //приведение пути к рабочему столу к виду, пригодному для передачи в FindFirstFileW для поиска файлов на рабочем столе
     wchar_t searchPath[MAX_PATH];
-    StringCchCopyW(searchPath, MAX_PATH, desktopPath);
-    StringCchCatW(searchPath, MAX_PATH, L"\\*");
+    if
+    (
+        StringCchCopyW(searchPath, MAX_PATH, desktopPath) != S_OK ||
+        StringCchCatW(searchPath, MAX_PATH, L"\\*.url") != S_OK
+    )
+    {
+        CleanupExecute(cleanupStack);
+        MessageBoxA
+        (
+            NULL,
+            "Error of pathes",
+            NULL,
+            MB_OK
+        );
+        return -1;
+    }
 
     LARGE_INTEGER filesize;
     WIN32_FIND_DATAW fileData;                                                  // информация о файле
@@ -108,18 +133,22 @@ int main(void)
     }
     CleanupPush(cleanupStack, FindCloseCleanupWrap, &searchingFilesHandle);
 
+    FILE *file = NULL;
     do
     {
-        if (fileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-        {
-            wprintf(L"Foldr: %ls\n", fileData.cFileName);
-        }
-        else
-        {
-            filesize.LowPart = fileData.nFileSizeLow;
-            filesize.HighPart = fileData.nFileSizeHigh;
-            wprintf(L"File: %ls\n", fileData.cFileName);
-        }
+        filesize.LowPart = fileData.nFileSizeLow;
+        filesize.HighPart = fileData.nFileSizeHigh;
+
+        file = _wfopen(fileData.cFileName, "r");
+        char *buffer = malloc(filesize.QuadPart + 1);   //+1 для NULL-терминатора
+        if(buffer == NULL || file == NULL) continue;
+
+        fread(buffer, 1, filesize.QuadPart, file); // Чтение содержимого
+        buffer[filesize.QuadPart] = '\0';
+        wprintf(L"File: %ls – \n", fileData.cFileName);
+
+        free(buffer);
+        fclose(file);
     }
     while (FindNextFileW(searchingFilesHandle, &fileData));
 
