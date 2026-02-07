@@ -99,6 +99,7 @@ int main(void)
     {
         filesize.LowPart = fileData.nFileSizeLow;
         filesize.HighPart = fileData.nFileSizeHigh;
+        if (filesize.QuadPart <= 0) continue;
 
         //получить абсолютный путь до ярлыка
         wchar_t absoluteFilePath[MAX_PATH];
