@@ -10,56 +10,17 @@
 #include <io.h>
 #include <fcntl.h>
 
-void FindCloseCleanupWrap(void *arg)
-{
-    HANDLE *realArg = arg;
-    FindClose(*realArg);
-}
+#include "cleanup interface.h"
+#define MAX_CURRENT_SYSTEM_RESOURCES 6
 
-void CoTaskMemFreeCleanupWrap(void *arg)
-{
-    PWSTR *realArg = arg;
-    CoTaskMemFree(*realArg);
-}
-
-typedef struct
-{
-    void (*func)(void *);    //указатель на функцию, принемающую аргумент – указатель на void func(void *arg);
-    void *arg;
-} DeallocatingUnit;
-
-typedef struct
-{
-    DeallocatingUnit deallocatingUnits[4];
-    size_t size;
-} *CleanupStack;
-
-CleanupStack CleanupStackInit()
-{
-    CleanupStack tempPtr = malloc(sizeof(*tempPtr));
-    if (tempPtr) tempPtr->size = 0;     //если malloc вернул не NULL
-    return tempPtr;
-}
-
-void CleanupPush(CleanupStack cs, void (*func)(void *), void *arg)
-{
-    cs->deallocatingUnits[cs->size++] = (DeallocatingUnit){ func, arg };
-}
-void CleanupExecute(CleanupStack cs)
-{
-    while (cs->size > 0)
-    {
-        --cs->size;
-        cs->deallocatingUnits[cs->size].func(cs->deallocatingUnits[cs->size].arg);
-    }
-    free(cs);
-}
+void FindCloseCleanupWrap(void *arg);
+void CoTaskMemFreeCleanupWrap(void *arg);
 
 int main(void)
 {
     _setmode(_fileno(stdout), _O_U16TEXT);  //CRT теперь печатает в консоль только unicode
 
-    CleanupStack cleanupStack = CleanupStackInit();
+    CleanupStack cleanupStack = InitCleanupStack(MAX_CURRENT_SYSTEM_RESOURCES);
     if (cleanupStack == NULL)
     {
         MessageBoxA
@@ -81,11 +42,11 @@ int main(void)
         NULL,
         &desktopPath
     );
-    CleanupPush(cleanupStack, CoTaskMemFreeCleanupWrap, &desktopPath);
+    PushCleanupStack(cleanupStack, CoTaskMemFreeCleanupWrap, &desktopPath);
 
     if (FAILED(desktopPathResult))
     {
-        CleanupExecute(cleanupStack);
+        CompleteDeallocation(cleanupStack);
         MessageBoxA
         (
             NULL,
@@ -105,7 +66,7 @@ int main(void)
         StringCchCatW(searchPath, MAX_PATH, L"\\*.url") != S_OK
     )
     {
-        CleanupExecute(cleanupStack);
+        CompleteDeallocation(cleanupStack);
         MessageBoxA
         (
             NULL,
@@ -121,7 +82,7 @@ int main(void)
     HANDLE searchingFilesHandle = FindFirstFileW(searchPath, &fileData);        // получить дескриптор поиска и получить первый файл
     if (INVALID_HANDLE_VALUE == searchingFilesHandle)                           // если дескриптор неверный
     {
-        CleanupExecute(cleanupStack);
+        CompleteDeallocation(cleanupStack);
         MessageBoxA
         (
             NULL,
@@ -131,9 +92,9 @@ int main(void)
         );
         return -1;
     }
-    CleanupPush(cleanupStack, FindCloseCleanupWrap, &searchingFilesHandle);
+    PushCleanupStack(cleanupStack, FindCloseCleanupWrap, &searchingFilesHandle);
 
-    FILE *debuging = _wfopen(L"C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug.txt", "w");
+    FILE *debuging = _wfopen(L"C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug.txt", L"w");
     do
     {
         filesize.LowPart = fileData.nFileSizeLow;
@@ -145,7 +106,7 @@ int main(void)
         StringCchCatW(absoluteFilePath, MAX_PATH, L"\\");
         StringCchCatW(absoluteFilePath, MAX_PATH, fileData.cFileName);
 
-        FILE *file = _wfopen(absoluteFilePath, "r");
+        FILE *file = _wfopen(absoluteFilePath, L"r");
         char *buffer = malloc(filesize.QuadPart + 1);   //+1 для NULL-терминатора
 
         fread(buffer, 1, filesize.QuadPart, file); // Чтение содержимого
@@ -162,7 +123,7 @@ int main(void)
     DWORD dwError = GetLastError();
     if (dwError != ERROR_NO_MORE_FILES) 
     {
-        CleanupExecute(cleanupStack);
+        CompleteDeallocation(cleanupStack);
         MessageBoxA
         (
             NULL,
@@ -173,6 +134,18 @@ int main(void)
         return -1;
     }
     
-    CleanupExecute(cleanupStack);
+    CompleteDeallocation(cleanupStack);
     return 0;
+}
+
+void FindCloseCleanupWrap(void *arg)
+{
+    HANDLE *realArg = arg;
+    FindClose(*realArg);
+}
+
+void CoTaskMemFreeCleanupWrap(void *arg)
+{
+    PWSTR *realArg = arg;
+    CoTaskMemFree(*realArg);
 }

@@ -3,6 +3,7 @@ cd /d "%~dp0\.."
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat"
 
 cl src\main.c ^
+   "src\cleanup interface.c"^
    /Zi ^
    /Od ^
    /W4 ^
