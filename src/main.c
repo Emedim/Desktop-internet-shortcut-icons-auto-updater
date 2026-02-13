@@ -94,7 +94,7 @@ int main(void)
     }
     PushCleanupStack(cleanupStack, FindCloseCleanupWrap, &searchingFilesHandle);
 
-    FILE *debuging = _wfopen(L"C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug.txt", L"w");
+    FILE *debuging = _wfopen(L"C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug.txt", L"wb");
     do
     {
         filesize.LowPart = fileData.nFileSizeLow;
@@ -107,11 +107,10 @@ int main(void)
         StringCchCatW(absoluteFilePath, MAX_PATH, L"\\");
         StringCchCatW(absoluteFilePath, MAX_PATH, fileData.cFileName);
 
-        FILE *file = _wfopen(absoluteFilePath, L"r");
-        char *buffer = malloc(filesize.QuadPart + 1);   //+1 для NULL-терминатора
+        FILE *file = _wfopen(absoluteFilePath, L"rb");
+        char *buffer = malloc(filesize.QuadPart);
 
         fread(buffer, 1, filesize.QuadPart, file); // Чтение содержимого
-        buffer[filesize.QuadPart] = '\0';
         fwrite(buffer, 1, filesize.QuadPart, debuging);
         wprintf(L"File: %ls\n", fileData.cFileName);
 
