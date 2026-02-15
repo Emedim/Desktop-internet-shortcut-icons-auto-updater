@@ -21,17 +21,7 @@ int main(void)
     _setmode(_fileno(stdout), _O_U16TEXT);  //CRT теперь печатает в консоль только unicode
 
     CleanupStack cleanupStack = InitCleanupStack(MAX_CURRENT_SYSTEM_RESOURCES);
-    if (cleanupStack == NULL)
-    {
-        MessageBoxA
-        (
-            NULL,
-            "initialization error",
-            NULL,
-            MB_OK
-        );
-        return -1;
-    }
+    if (cleanupStack == NULL) FatalError(cleanupStack, "initialization error");
 
     PWSTR desktopPath = NULL;
     HRESULT desktopPathResult;
@@ -44,18 +34,8 @@ int main(void)
     );
     PushCleanupStack(cleanupStack, CoTaskMemFreeCleanupWrap, &desktopPath);
 
-    if (FAILED(desktopPathResult))
-    {
-        CompleteDeallocation(cleanupStack);
-        MessageBoxA
-        (
-            NULL,
-            "Could not find path to desktop",
-            NULL,
-            MB_OK
-        );
-        return -1;
-    }
+    if (FAILED(desktopPathResult)) FatalError(cleanupStack, "Could not find path to desktop");
+    
     wprintf(L"Desktop path: %ls\n\n", desktopPath);   //показать путь к рабочему столу
     
     //приведение пути к рабочему столу к виду, пригодному для передачи в FindFirstFileW для поиска файлов на рабочем столе
@@ -65,33 +45,12 @@ int main(void)
         StringCchCopyW(searchPath, MAX_PATH, desktopPath) != S_OK ||
         StringCchCatW(searchPath, MAX_PATH, L"\\*.url") != S_OK
     )
-    {
-        CompleteDeallocation(cleanupStack);
-        MessageBoxA
-        (
-            NULL,
-            "Error of pathes",
-            NULL,
-            MB_OK
-        );
-        return -1;
-    }
+    FatalError(cleanupStack, "Error of pathes");
 
     LARGE_INTEGER filesize;
     WIN32_FIND_DATAW fileData;                                                  // информация о файле
     HANDLE searchingFilesHandle = FindFirstFileW(searchPath, &fileData);        // получить дескриптор поиска и получить первый файл
-    if (INVALID_HANDLE_VALUE == searchingFilesHandle)                           // если дескриптор неверный
-    {
-        CompleteDeallocation(cleanupStack);
-        MessageBoxA
-        (
-            NULL,
-            "Invalid files searching descriptor value",
-            NULL,
-            MB_OK
-        );
-        return -1;
-    }
+    if (INVALID_HANDLE_VALUE == searchingFilesHandle) FatalError(cleanupStack, "Invalid files searching descriptor value");
     PushCleanupStack(cleanupStack, FindCloseCleanupWrap, &searchingFilesHandle);
 
     FILE *debuging = _wfopen(L"C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug.txt", L"wb");
@@ -121,21 +80,22 @@ int main(void)
     fclose(debuging);
 
     DWORD dwError = GetLastError();
-    if (dwError != ERROR_NO_MORE_FILES) 
-    {
-        CompleteDeallocation(cleanupStack);
-        MessageBoxA
-        (
-            NULL,
-            "Unknown error of searching files",
-            NULL,
-            MB_OK
-        );
-        return -1;
-    }
+    if (dwError != ERROR_NO_MORE_FILES) FatalError(cleanupStack, "Unknown error of searching files");
     
     CompleteDeallocation(cleanupStack);
     return 0;
+}
+
+void FatalError(CleanupStack cs, char *message)
+{
+    if (cs) CompleteDeallocation(cs);   //если cs не NULL
+    MessageBoxA
+    (
+        NULL,
+        message,
+        NULL,
+        MB_OK
+    );
 }
 
 void FindCloseCleanupWrap(void *arg)
