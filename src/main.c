@@ -11,7 +11,7 @@
 #include <fcntl.h>
 
 #include "cleanup interface.h"
-#define MAX_CURRENT_SYSTEM_RESOURCES 6
+#define MAX_CURRENT_SYSTEM_RESOURCES 2
 
 void FindCloseCleanupWrap(void *arg);
 void CoTaskMemFreeCleanupWrap(void *arg);
