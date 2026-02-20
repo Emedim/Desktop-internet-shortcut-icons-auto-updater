@@ -14,7 +14,7 @@
 
       "preLaunchTask": "build",
 
-      "console": "externalTerminal"   
+      "console": "externalTerminal"
     }
   ]
 }

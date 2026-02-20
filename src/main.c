@@ -11,17 +11,20 @@
 #include <fcntl.h>
 
 #include "cleanup interface.h"
-#define MAX_CURRENT_SYSTEM_RESOURCES 2
+#define MAX_CURRENT_SYSTEM_RESOURCES 3
 
+void FatalError(char *message);
 void FindCloseCleanupWrap(void *arg);
 void CoTaskMemFreeCleanupWrap(void *arg);
+
+CleanupStack cleanupStack = NULL;   
 
 int main(void)
 {
     _setmode(_fileno(stdout), _O_U16TEXT);  //CRT теперь печатает в консоль только unicode
 
-    CleanupStack cleanupStack = InitCleanupStack(MAX_CURRENT_SYSTEM_RESOURCES);
-    if (cleanupStack == NULL) FatalError(cleanupStack, "initialization error");
+    cleanupStack = InitCleanupStack(MAX_CURRENT_SYSTEM_RESOURCES);
+    if (cleanupStack == NULL) FatalError("initialization error");
 
     PWSTR desktopPath = NULL;
     HRESULT desktopPathResult;
@@ -34,7 +37,7 @@ int main(void)
     );
     PushCleanupStack(cleanupStack, CoTaskMemFreeCleanupWrap, &desktopPath);
 
-    if (FAILED(desktopPathResult)) FatalError(cleanupStack, "Could not find path to desktop");
+    if (FAILED(desktopPathResult)) FatalError("Could not find path to desktop");
     
     wprintf(L"Desktop path: %ls\n\n", desktopPath);   //показать путь к рабочему столу
     
@@ -45,12 +48,12 @@ int main(void)
         StringCchCopyW(searchPath, MAX_PATH, desktopPath) != S_OK ||
         StringCchCatW(searchPath, MAX_PATH, L"\\*.url") != S_OK
     )
-    FatalError(cleanupStack, "Error of pathes");
+    FatalError("Error of pathes");
 
     LARGE_INTEGER filesize;
     WIN32_FIND_DATAW fileData;                                                  // информация о файле
     HANDLE searchingFilesHandle = FindFirstFileW(searchPath, &fileData);        // получить дескриптор поиска и получить первый файл
-    if (INVALID_HANDLE_VALUE == searchingFilesHandle) FatalError(cleanupStack, "Invalid files searching descriptor value");
+    if (INVALID_HANDLE_VALUE == searchingFilesHandle) FatalError("Invalid files searching descriptor value");
     PushCleanupStack(cleanupStack, FindCloseCleanupWrap, &searchingFilesHandle);
 
     FILE *debuging = _wfopen(L"C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug.txt", L"wb");
@@ -80,15 +83,15 @@ int main(void)
     fclose(debuging);
 
     DWORD dwError = GetLastError();
-    if (dwError != ERROR_NO_MORE_FILES) FatalError(cleanupStack, "Unknown error of searching files");
+    if (dwError != ERROR_NO_MORE_FILES) FatalError("Unknown error of searching files");
     
     CompleteDeallocation(cleanupStack);
     return 0;
 }
 
-void FatalError(CleanupStack cs, char *message)
+void FatalError(char *message)
 {
-    if (cs) CompleteDeallocation(cs);   //если cs не NULL
+    if (cleanupStack) CompleteDeallocation(cleanupStack);   //если cleanupStack не NULL
     MessageBoxA
     (
         NULL,
