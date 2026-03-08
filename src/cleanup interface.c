@@ -18,7 +18,7 @@ typedef struct tag_cleanupStack* CleanupStack;  //Передаём этот об
 CleanupStack InitCleanupStack(uint8_t totalResourcesQuantity)   /*создаёт объект "стека очистки" с необходимым размером. 
 Как параметр принемает максимальное количество существующих одновременно ресурсов системы на 1 "стек очистки"          */
 {
-    if(totalResourcesQuantity == 0 || totalResourcesQuantity == 255) return NULL;    //валидация: ресурсов для стека очистки может быть ∈ [1; 254]
+    if(totalResourcesQuantity == 0 || totalResourcesQuantity == 255) return NULL;    //валидация: количество ресурсов стека очистки ∈ [1; 254]
     CleanupStack tempPtr = malloc(sizeof(*tempPtr));
     if (tempPtr)    //если malloc вернул не NULL
     {
