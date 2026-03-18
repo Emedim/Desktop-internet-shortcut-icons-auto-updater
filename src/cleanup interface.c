@@ -4,7 +4,7 @@
 
 typedef struct      //структура: указатель на обобщённую функцию и параметр для неё
 {
-    void (*func)(void *);    //сигнатура такой функции: void func(void *someArg);
+    void (*func)(const void *);    //сигнатура такой функции: void func(void *someArg);
     void *arg;
 } GeneralizedUnit;
 

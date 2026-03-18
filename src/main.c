@@ -11,12 +11,26 @@
 #include <fcntl.h>
 
 #include "cleanup interface.h"
-#define MAX_CURRENT_SYSTEM_RESOURCES 3
-#define DEBUG_ICO_PATH L"C:/Users/emedi/Documents/Проекты по программированию/Complex projects/Desktop icons auto updater/resources/test_ico/ico.ico"
+#define STANDARD_ERROR (-1)
+#define MAX_CURRENT_SYSTEM_RESOURCES (5)
+#define INICIAL_BUFFER_LENGTH (12)
+#define BUFFER_ADDITION (8)
 
 void FatalError(char *message);
-void FindCloseCleanupWarp(void *arg);
-void CoTaskMemFreeCleanupWarp(void *arg);
+
+void Warp_FindClose(const void *arg);
+void Warp_CoTaskMemFree(const void *arg);
+void Warp_Free(const void *arg);
+void Warp_FClose(const void *arg);
+
+
+
+typedef struct tag_IconRrocessUnit
+{
+    char *url;
+} IconRrocessUnit;
+
+
 
 CleanupStack cleanupStack = NULL;
 
@@ -28,7 +42,7 @@ int main(void)
     if (cleanupStack == NULL)
     {
         FatalError("initialization error");
-        return -1;
+        return STANDARD_ERROR;
     }
 
     PWSTR desktopPath = NULL;
@@ -40,15 +54,15 @@ int main(void)
         NULL,
         &desktopPath
     );
-    PushCleanupStack(cleanupStack, CoTaskMemFreeCleanupWarp, &desktopPath);
+    PushCleanupStack(cleanupStack, Warp_CoTaskMemFree, &desktopPath);
 
     if (FAILED(desktopPathResult)) 
     {
         FatalError("Could not find path to desktop");
-        return -1;
+        return STANDARD_ERROR;
     }
     
-    wprintf(L"Desktop path: %ls\n\n", desktopPath);   //показать путь к рабочему столу
+    wprintf(L"Путь к рабочему столу: %ls\n\n", desktopPath);   //показать путь к рабочему столу
     
     //приведение пути к рабочему столу к виду, пригодному для передачи в FindFirstFileW для поиска файлов на рабочем столе
     wchar_t searchPath[MAX_PATH];
@@ -59,7 +73,7 @@ int main(void)
     )
     {
         FatalError("Error of pathes");
-        return -1;
+        return STANDARD_ERROR;
     }
 
     LARGE_INTEGER filesize;
@@ -68,14 +82,24 @@ int main(void)
     if (INVALID_HANDLE_VALUE == searchingFilesHandle)
     {
         FatalError("Invalid files searching descriptor value");
-        return -1;
+        return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, FindCloseCleanupWarp, &searchingFilesHandle);
+    PushCleanupStack(cleanupStack, Warp_FindClose, &searchingFilesHandle);
     
+    size_t processingFilesContainerLength = INICIAL_BUFFER_LENGTH;
+    size_t occupedProcessingFilesContainerUnits = 0;
+    IconRrocessUnit *processingFilesContainer = malloc(processingFilesContainerLength * sizeof(IconRrocessUnit));
+    if(!processingFilesContainer) // не NULL
+    {
+        FatalError("error of allocation heap");
+        return STANDARD_ERROR;
+    }
+    PushCleanupStack(cleanupStack, Warp_Free, &processingFilesContainer);
+
     do
     {
         filesize.LowPart = fileData.nFileSizeLow;
-        filesize.HighPart = fileData.nFileSizeHigh;
+        filesize.HighPart = fileData.nFileSizeHigh; // filesize.QuadPart – размер фала
 
         //получить абсолютный путь до ярлыка
         wchar_t absoluteFilePath[MAX_PATH];
@@ -85,27 +109,37 @@ int main(void)
 
         wprintf(L"File: %ls\n", fileData.cFileName);
 
-        if (!WritePrivateProfileStringW(
-                L"InternetShortcut",
-                L"IconFile",
-                DEBUG_ICO_PATH,
-                absoluteFilePath
-        ))
+        ++occupedProcessingFilesContainerUnits;
+        if (occupedProcessingFilesContainerUnits > processingFilesContainerLength)
         {
-            FatalError("error of setting ico path for url");
-            return -1;
-        } 
+            IconRrocessUnit *temp = realloc(processingFilesContainer, (processingFilesContainerLength + BUFFER_ADDITION) * sizeof(IconRrocessUnit)); //выделили новый массив, количество элементов: старое количество + немного ещё
+            if (!temp)  // temp == NULL
+            {
+                FatalError("error of allocation heap");
+                return STANDARD_ERROR;
+            }
+            processingFilesContainerLength += BUFFER_ADDITION;
+            processingFilesContainer = temp;
+        }
+        
+        FILE *file = _wfopen(absoluteFilePath, L"rb");
+        if (!file)  //file == NULL
+        {
+            FatalError("error of opening file");
+            return STANDARD_ERROR;
+        }
+        PushCleanupStack(cleanupStack, Warp_FClose, &file);
+        char *fileContent = malloc(filesize.QuadPart);
+        if(!fileContent)
+        {
+            FatalError("error of allocation heap");
+            return STANDARD_ERROR;
+        }
+        PushCleanupStack(cleanupStack, Warp_Free, &fileContent);
 
-        if(!WritePrivateProfileStringW(
-                L"InternetShortcut",
-                L"IconIndex",
-                L"0",
-                absoluteFilePath
-        ))
-        {
-            FatalError("error of setting ico index for url");
-            return -1;
-        } 
+        fread(fileContent, 1, filesize.QuadPart, file);
+
+        PartialDeallocation(cleanupStack, 2);
     }
     while (FindNextFileW(searchingFilesHandle, &fileData));
 
@@ -113,15 +147,17 @@ int main(void)
     if (dwError != ERROR_NO_MORE_FILES)
     {
         FatalError("Unknown error of searching files");
-        return -1;
+        return STANDARD_ERROR;
     }
 
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
-    wprintf("\n");
+    wprintf(L"\nИтого файлов: %d\n", occupedProcessingFilesContainerUnits);
     
     CompleteDeallocation(cleanupStack);
     return 0;
 }
+
+
 
 void FatalError(const char *message)
 {
@@ -135,14 +171,26 @@ void FatalError(const char *message)
     );
 }
 
-void FindCloseCleanupWarp(const void *arg)
+void Warp_FindClose(const void *arg)
 {
     HANDLE *realTypeArg = arg;
     FindClose(*realTypeArg);
 }
 
-void CoTaskMemFreeCleanupWarp(const void *arg)
+void Warp_CoTaskMemFree(const void *arg)
 {
     PWSTR *realTypeArg = arg;
     CoTaskMemFree(*realTypeArg);
+}
+
+void Warp_Free(const void *arg)
+{
+    void **realTypeArg = arg;
+    free(*realTypeArg);
+}
+
+void Warp_FClose(const void *arg)
+{
+    FILE **realTypeArg = arg;
+    fclose(*realTypeArg);
 }
