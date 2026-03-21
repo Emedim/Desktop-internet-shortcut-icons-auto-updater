@@ -16,23 +16,33 @@
 #define INICIAL_BUFFER_LENGTH (12)
 #define BUFFER_ADDITION (8)
 
-void FatalError(char *message);
+static void FatalError(const byte *message);
+static void ParceFileText(const byte *text, size_t textLength, byte *result);
+bool CompareSymbols(byte symbol1, byte symbol2);
 
 void Warp_FindClose(const void *arg);
 void Warp_CoTaskMemFree(const void *arg);
 void Warp_Free(const void *arg);
+void Warp_Free_IconProcessContainer(const void *arg);
 void Warp_FClose(const void *arg);
 
 
 
-typedef struct tag_IconRrocessUnit
+typedef struct tag_IconProcessUnit
 {
-    char *url;
-} IconRrocessUnit;
+    byte *url;
+} IconProcessUnit;
+
+typedef struct tag_IconProcessContainer
+{
+    IconProcessUnit *array;
+    size_t *occupedUnitsPtr;
+} IconProcessContainer;
 
 
 
 CleanupStack cleanupStack = NULL;
+const byte internetShortcut[] = "internetshortcut";
 
 int main(void)
 {
@@ -76,7 +86,7 @@ int main(void)
         return STANDARD_ERROR;
     }
 
-    LARGE_INTEGER filesize;
+    LARGE_INTEGER fileSize;
     WIN32_FIND_DATAW fileData;                                                  // информация о файле
     HANDLE searchingFilesHandle = FindFirstFileW(searchPath, &fileData);        // получить дескриптор поиска и получить первый файл
     if (INVALID_HANDLE_VALUE == searchingFilesHandle)
@@ -88,18 +98,19 @@ int main(void)
     
     size_t processingFilesContainerLength = INICIAL_BUFFER_LENGTH;
     size_t occupedProcessingFilesContainerUnits = 0;
-    IconRrocessUnit *processingFilesContainer = malloc(processingFilesContainerLength * sizeof(IconRrocessUnit));
+    IconProcessUnit *processingFilesContainer = malloc(processingFilesContainerLength * sizeof(IconProcessUnit));
     if(!processingFilesContainer) // не NULL
     {
         FatalError("error of allocation heap");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Warp_Free, &processingFilesContainer);
+    IconProcessContainer iconProcessContainer = {processingFilesContainer, &occupedProcessingFilesContainerUnits};
+    PushCleanupStack(cleanupStack, Warp_Free_IconProcessContainer, &iconProcessContainer);
 
     do
     {
-        filesize.LowPart = fileData.nFileSizeLow;
-        filesize.HighPart = fileData.nFileSizeHigh; // filesize.QuadPart – размер фала
+        fileSize.LowPart = fileData.nFileSizeLow;
+        fileSize.HighPart = fileData.nFileSizeHigh; // fileSize.QuadPart – размер фала
 
         //получить абсолютный путь до ярлыка
         wchar_t absoluteFilePath[MAX_PATH];
@@ -109,10 +120,11 @@ int main(void)
 
         wprintf(L"File: %ls\n", fileData.cFileName);
 
+        //создать буффер для хранения информации о ярлыках
         ++occupedProcessingFilesContainerUnits;
         if (occupedProcessingFilesContainerUnits > processingFilesContainerLength)
         {
-            IconRrocessUnit *temp = realloc(processingFilesContainer, (processingFilesContainerLength + BUFFER_ADDITION) * sizeof(IconRrocessUnit)); //выделили новый массив, количество элементов: старое количество + немного ещё
+            IconProcessUnit *temp = realloc(processingFilesContainer, (processingFilesContainerLength + BUFFER_ADDITION) * sizeof(IconProcessUnit)); //выделили новый массив, количество элементов: старое количество + немного ещё
             if (!temp)  // temp == NULL
             {
                 FatalError("error of allocation heap");
@@ -122,22 +134,21 @@ int main(void)
             processingFilesContainer = temp;
         }
         
+        //скопировать ini–текст из ярлыков
         FILE *file = _wfopen(absoluteFilePath, L"rb");
         if (!file)  //file == NULL
-        {
-            FatalError("error of opening file");
-            return STANDARD_ERROR;
-        }
+            continue;
         PushCleanupStack(cleanupStack, Warp_FClose, &file);
-        char *fileContent = malloc(filesize.QuadPart);
-        if(!fileContent)
+        byte *fileContent = malloc(fileSize.QuadPart);
+        if(!fileContent)  //fileContent == NULL
         {
-            FatalError("error of allocation heap");
-            return STANDARD_ERROR;
+            SingleDeallocation(cleanupStack);
+            continue;
         }
         PushCleanupStack(cleanupStack, Warp_Free, &fileContent);
 
-        fread(fileContent, 1, filesize.QuadPart, file);
+        fread(fileContent, 1, fileSize.QuadPart, file);
+        ParceFileText(fileContent, fileSize.QuadPart, processingFilesContainer[occupedProcessingFilesContainerUnits - 1].url);
 
         PartialDeallocation(cleanupStack, 2);
     }
@@ -158,8 +169,27 @@ int main(void)
 }
 
 
+static void ParceFileText(const byte *text, size_t textLength, byte *result)
+{
+    *result = NULL;
+    size_t seek = 0;
+    bool inTargetSection = false;
+    while (textLength - seek)   //разница =! 0
+    {
+        if (text[seek] == '[')
+        {
+            if (inTargetSection) break; //началась новая секция
+            ++seek;
+            while(true)
+            {
+                
+                ++seek;
+            }
+        }
+    }
+}
 
-void FatalError(const char *message)
+static void FatalError(const byte *message)
 {
     if (cleanupStack) CompleteDeallocation(cleanupStack);   //если cleanupStack не NULL
     MessageBoxA
@@ -171,7 +201,20 @@ void FatalError(const char *message)
     );
 }
 
-void Warp_FindClose(const void *arg)
+byte ToLower(byte symbol)
+{
+    if (symbol >= 65 && symbol <= 90) symbol += 32;
+    return symbol;
+}
+
+bool CompareSymbols(byte symbol1, byte symbol2)
+{
+    return ToLower(symbol1) == ToLower(symbol2);
+}
+
+
+
+static void Warp_FindClose(const void *arg)
 {
     HANDLE *realTypeArg = arg;
     FindClose(*realTypeArg);
@@ -187,6 +230,17 @@ void Warp_Free(const void *arg)
 {
     void **realTypeArg = arg;
     free(*realTypeArg);
+}
+
+void Warp_Free_IconProcessContainer(const void *arg)
+{
+    IconProcessContainer realTypeArg = *(IconProcessContainer*)arg;
+    while (*realTypeArg.occupedUnitsPtr > 0)
+    {
+        --*realTypeArg.occupedUnitsPtr;
+        if (realTypeArg.array->url) free(realTypeArg.array->url);
+    }
+    free(realTypeArg.array);
 }
 
 void Warp_FClose(const void *arg)

@@ -1,0 +1,4 @@
+NULL в условиях равен false, !NULL == true
+
+NULL == false;
+!NULL == true;
