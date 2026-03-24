@@ -151,7 +151,7 @@ int main(void)
 
         fread(fileContent, 1, fileSize.QuadPart, file);
         ParceFileText(fileContent, fileSize.QuadPart, &(processingFilesContainer[occupedProcessingFilesContainerUnits - 1].url));
-        
+
         PartialDeallocation(cleanupStack, 2);
     }
     while (FindNextFileW(searchingFilesHandle, &fileData));
@@ -164,7 +164,7 @@ int main(void)
     }
 
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
-    wprintf(L"\nИтого файлов: %d\n", occupedProcessingFilesContainerUnits);
+    wprintf(L"\nИтого файлов: %d\n\n", occupedProcessingFilesContainerUnits);
     
     CompleteDeallocation(cleanupStack);
     return 0;
@@ -241,7 +241,7 @@ static size_t SkipByCondition(BufferContext *bfctx, bool (*condition)(const Buff
 
 static size_t SkipCurrentLine(BufferContext *bfctx)
 {
-    size_t steps = SkipTextUntill(bfctx, Condition_StopWhen, NEW_LINE_SYMBOL);
+    size_t steps = SkipByCondition(bfctx, Condition_StopWhen, NEW_LINE_SYMBOL);
     BUFFER_INCREASE_PTR(bfctx);
     return ++steps;
 }
@@ -315,7 +315,7 @@ static void ParceFileText(const byte *text, size_t textLength, byte **result)
 
 
 
-static void Warp_FindClose(const void *arg)
+void Warp_FindClose(const void *arg)
 {
     HANDLE *realTypeArg = arg;
     FindClose(*realTypeArg);
@@ -339,7 +339,7 @@ void Warp_Free_IconProcessContainer(const void *arg)
     while (*realTypeArg.occupedUnitsPtr > 0)
     {
         --*realTypeArg.occupedUnitsPtr;
-        if (realTypeArg.array->url) free(realTypeArg.array->url);
+        if (realTypeArg.array[*realTypeArg.occupedUnitsPtr].url) free(realTypeArg.array[*realTypeArg.occupedUnitsPtr].url);
     }
     free(realTypeArg.array);
 }
