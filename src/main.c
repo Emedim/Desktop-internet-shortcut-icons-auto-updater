@@ -28,7 +28,6 @@ void Warp_Free_IconProcessContainer(const void *arg);
 void Warp_FClose(const void *arg);
 
 
-
 typedef struct tag_IconProcessUnit
 {
     byte *url;
@@ -41,10 +40,7 @@ typedef struct tag_IconProcessContainer
 } IconProcessContainer;
 
 
-
 CleanupStack cleanupStack = NULL;
-const byte internetShortcut[] = "internetshortcut";
-const byte url[] = "url";
 
 int main(void)
 {
@@ -88,7 +84,6 @@ int main(void)
         return STANDARD_ERROR;
     }
 
-    LARGE_INTEGER fileSize;
     WIN32_FIND_DATAW fileData;                                                  // информация о файле
     HANDLE searchingFilesHandle = FindFirstFileW(searchPath, &fileData);        // получить дескриптор поиска и получить первый файл
     if (INVALID_HANDLE_VALUE == searchingFilesHandle)
@@ -111,31 +106,42 @@ int main(void)
 
     do
     {
+        //создать буффер для хранения информации о ярлыках
+        ++occupedProcessingFilesContainerUnits;
+        if (occupedProcessingFilesContainerUnits > processingFilesContainerLength)
+        {
+            processingFilesContainerLength += BUFFER_ADDITION;
+            IconProcessUnit *temp = realloc(processingFilesContainer, processingFilesContainerLength * sizeof(IconProcessUnit)); //выделили новый массив, количество элементов: старое количество + немного ещё
+            if (!temp)  // temp == NULL
+            {
+                --occupedProcessingFilesContainerUnits;
+                FatalError("error of allocation heap");
+                return STANDARD_ERROR;
+            }
+            processingFilesContainer = temp;
+        }
+        processingFilesContainer[occupedProcessingFilesContainerUnits - 1].url = NULL;
+
+        LARGE_INTEGER fileSize;
         fileSize.LowPart = fileData.nFileSizeLow;
         fileSize.HighPart = fileData.nFileSizeHigh; // fileSize.QuadPart – размер фала
 
         //получить абсолютный путь до ярлыка
         wchar_t absoluteFilePath[MAX_PATH];
-        StringCchCopyW(absoluteFilePath, MAX_PATH, desktopPath);
-        StringCchCatW(absoluteFilePath, MAX_PATH, L"\\");
-        StringCchCatW(absoluteFilePath, MAX_PATH, fileData.cFileName);
 
-        wprintf(L"File: %ls\n", fileData.cFileName);
-
-        //создать буффер для хранения информации о ярлыках
-        ++occupedProcessingFilesContainerUnits;
-        if (occupedProcessingFilesContainerUnits > processingFilesContainerLength)
+        if
+        (
+            StringCchCopyW(absoluteFilePath, MAX_PATH, desktopPath) != S_OK ||
+            StringCchCatW(absoluteFilePath, MAX_PATH, L"\\") != S_OK ||
+            StringCchCatW(absoluteFilePath, MAX_PATH, fileData.cFileName) != S_OK
+        )
         {
-            IconProcessUnit *temp = realloc(processingFilesContainer, (processingFilesContainerLength + BUFFER_ADDITION) * sizeof(IconProcessUnit)); //выделили новый массив, количество элементов: старое количество + немного ещё
-            if (!temp)  // temp == NULL
-            {
-                FatalError("error of allocation heap");
-                return STANDARD_ERROR;
-            }
-            processingFilesContainerLength += BUFFER_ADDITION;
-            processingFilesContainer = temp;
+            FatalError("error of pathes");
+            return STANDARD_ERROR;
         }
         
+        wprintf(L"File: %ls\n", fileData.cFileName);
+
         //скопировать ini–текст из ярлыков
         FILE *file = _wfopen(absoluteFilePath, L"rb");
         if (!file)  //file == NULL
@@ -218,6 +224,9 @@ typedef struct tag_BufferContext
 //взять текущий байт
 #define BUFFER_CURRENT_SYMBOL_OBJ(ctx) ((ctx).text[(ctx).seek])
 
+const byte internetShortcut[] = "internetshortcut";
+const byte url[] = "url";
+
 static bool Condition_StopWhen(const BufferContext *bfctx, const byte symbol)
 {   return BUFFER_CURRENT_SYMBOL(bfctx) != symbol; }
 
@@ -273,7 +282,6 @@ static bool CompareTexts(BufferContext *bfctx, const byte interrupter, const byt
 static void ParceFileText(const byte *text, size_t textLength, byte **result)
 {
     BufferContext bufferCtx = { text, textLength, 0 };
-    *result = NULL;
     bool inTargetSection = false;
     while (BUFFER_NOT_FINISHED_OBJ(bufferCtx))   //разница =! 0
     {
