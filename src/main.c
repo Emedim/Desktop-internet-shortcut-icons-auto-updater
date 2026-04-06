@@ -128,7 +128,7 @@ int main(void)
 
         //получить абсолютный путь до ярлыка
         wchar_t absoluteFilePath[MAX_PATH];
-
+        
         if
         (
             StringCchCopyW(absoluteFilePath, MAX_PATH, desktopPath) != S_OK ||
@@ -157,6 +157,11 @@ int main(void)
 
         fread(fileContent, 1, fileSize.QuadPart, file);
         ParceFileText(fileContent, fileSize.QuadPart, &(processingFilesContainer[occupedProcessingFilesContainerUnits - 1].url));
+        if (!processingFilesContainer[occupedProcessingFilesContainerUnits - 1].url)
+        {
+            PartialDeallocation(cleanupStack, 2);
+            continue;
+        }
 
         PartialDeallocation(cleanupStack, 2);
     }
@@ -212,6 +217,8 @@ typedef struct tag_BufferContext
 
 //не закончился ли буффер
 #define BUFFER_NOT_FINISHED(ctx) ((ctx)->seek < (ctx)->textLength)
+//буфер закончился?
+#define BUFFER_FINISHED(ctx) ((ctx)->seek >= (ctx)->textLength)
 //сместить указатель на 1
 #define BUFFER_INCREASE_PTR(ctx) (++(ctx)->seek)
 //взять текущий байт
@@ -219,6 +226,8 @@ typedef struct tag_BufferContext
 //САМ ОБЪЕКТ!
 //не закончился ли буффер
 #define BUFFER_NOT_FINISHED_OBJ(ctx) ((ctx).seek < (ctx).textLength)
+//буфер закончился?
+#define BUFFER_FINISHED_OBJ(ctx) ((ctx).seek >= (ctx).textLength)
 //сместить указатель на 1
 #define BUFFER_INCREASE_PTR_OBJ(ctx) (++(ctx).seek)
 //взять текущий байт
@@ -249,29 +258,31 @@ static size_t SkipByCondition(BufferContext *bfctx, bool (*condition)(const Buff
 }
 
 static size_t SkipCurrentLine(BufferContext *bfctx)
-{
+{   //в винде в файлах перевод на новую строку состоит из комбинации символов: /r/n – порядок именно такой
     size_t steps = SkipByCondition(bfctx, Condition_StopWhen, NEW_LINE_SYMBOL);
+    if (BUFFER_FINISHED(bfctx)) return steps;
     BUFFER_INCREASE_PTR(bfctx);
     return ++steps;
 }
 
-static bool CompareTexts(BufferContext *bfctx, const byte interrupter, const byte *subString, const bool doSkipSpaces)
+static bool CompareBufferToSubstring(BufferContext *bfctx, const byte interrupter, const byte *subString, const bool doSkipSpaces)
 {
     bool sameSoFar = true;
-    size_t tempIndex = 0;
+    size_t substringIndex = 0;
     bool tempRun = true;
     while(tempRun)
     {
+        if (BUFFER_FINISHED(bfctx)) return false;
         if
         (
             BUFFER_CURRENT_SYMBOL(bfctx) == interrupter &&
-            subString[tempIndex] == '\0'
+            subString[substringIndex] == '\0'
         )   tempRun = false;
         else
         {
-            sameSoFar = CompareSymbols(BUFFER_CURRENT_SYMBOL(bfctx), subString[tempIndex]);
+            sameSoFar = CompareSymbols(BUFFER_CURRENT_SYMBOL(bfctx), subString[substringIndex]);
             tempRun = sameSoFar;
-            ++tempIndex;
+            ++substringIndex;
         }
         BUFFER_INCREASE_PTR(bfctx);
         if (doSkipSpaces) SkipByCondition(bfctx, Condition_ContinueWhile, SPACE_SYMBOL);
@@ -281,31 +292,41 @@ static bool CompareTexts(BufferContext *bfctx, const byte interrupter, const byt
 
 static void ParceFileText(const byte *text, size_t textLength, byte **result)
 {
+    *result = NULL;
     BufferContext bufferCtx = { text, textLength, 0 };
     bool inTargetSection = false;
-    while (BUFFER_NOT_FINISHED_OBJ(bufferCtx))   //разница =! 0
+    while (BUFFER_NOT_FINISHED_OBJ(bufferCtx))
     {
         if (BUFFER_CURRENT_SYMBOL_OBJ(bufferCtx) == '[')
         {
             if (inTargetSection) return; //началась новая секция
             BUFFER_INCREASE_PTR_OBJ(bufferCtx);
-            bool same = CompareTexts(&bufferCtx, ']', internetShortcut, false);
+            bool same = CompareBufferToSubstring(&bufferCtx, ']', internetShortcut, false);
             if (same) inTargetSection = true;
             SkipCurrentLine(&bufferCtx);
         }
+        if (BUFFER_FINISHED_OBJ(bufferCtx)) return;
         if (inTargetSection)
         {
-            bool same = CompareTexts(&bufferCtx, '=', url, true);
+            bool same = CompareBufferToSubstring(&bufferCtx, '=', url, true);
             if (same)
             {
                 SkipByCondition(&bufferCtx, Condition_ContinueWhile, SPACE_SYMBOL);
-                size_t urlLength = SkipCurrentLine(&bufferCtx);
+                size_t urlLength = SkipCurrentLine(&bufferCtx); //urlLength содержит длину строки, в которой есть ссылка и /r/n на конце
+                while 
+                (
+                    bufferCtx.text[bufferCtx.seek] == '\n' ||
+                    bufferCtx.text[bufferCtx.seek] == '\r'
+                )
+                {
+                    --bufferCtx.seek;
+                    --urlLength;
+                }
                 bufferCtx.seek -= urlLength;
-                --urlLength;    //размер массива с \0 на конце
-                *result = malloc(urlLength);
+                if (!urlLength) return;
+                *result = malloc(urlLength + 1);    //для \0
                 if (*result)
                 {
-                    --urlLength;    //размер массива без \0 на конце
                     size_t tempIndex = 0;
                     while(tempIndex < urlLength)
                     {
@@ -343,7 +364,7 @@ void Warp_Free(const void *arg)
 
 void Warp_Free_IconProcessContainer(const void *arg)
 {
-    IconProcessContainer realTypeArg = *(IconProcessContainer*)arg;
+    IconProcessContainer realTypeArg = *(IconProcessContainer *)arg;
     while (*realTypeArg.occupedUnitsPtr > 0)
     {
         --*realTypeArg.occupedUnitsPtr;

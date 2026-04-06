@@ -2,3 +2,6 @@ NULL в условиях равен false, !NULL == true
 
 NULL == false;
 !NULL == true;
+
+if (!ptr)   //ptr == NULL
+if (ptr)    //ptr != NULL

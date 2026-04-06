@@ -4,14 +4,14 @@
 
 typedef struct      //структура: указатель на обобщённую функцию и параметр для неё
 {
-    void (*func)(const void *);    //сигнатура такой функции: void func(void *someArg);
+    void (*func)(const void *);    //сигнатура такой функции: void (*func)(const void *);
     void *arg;
 } GeneralizedUnit;
 
-struct tag_cleanupStack      //позволяет освобождать все занятые ресурсы по принцыпу стека (LIFO)
+typedef struct tag_cleanupStack      //позволяет освобождать все занятые ресурсы по принцыпу стека (LIFO)
 {
-    GeneralizedUnit *deallocatingUnits;    //храним массив всех ресурсов системы – ресурс и инструкция к очистке
     uint8_t size;        //количество зарегистрированных ресурсов системы ∈ [0; 255]
+    GeneralizedUnit *deallocatingUnits;    //храним массив всех ресурсов системы – ресурс и инструкция к очистке
 };
 typedef struct tag_cleanupStack* CleanupStack;  //Передаём этот объект в функции всегда как указатель, никогда напрямую с ним внутри main не работаем
 
@@ -33,7 +33,7 @@ CleanupStack InitCleanupStack(uint8_t totalResourcesQuantity)   /*создаёт
     return tempPtr; //возвращает либо указатель на созданый объект, либо NULL
 }
 
-void PushCleanupStack(CleanupStack cs, void (*func)(void *), void *arg)  //регистрируем ресурс, передавая функцию, которая вернёт его системе и указатель на сам ресурс
+void PushCleanupStack(CleanupStack cs, void (*func)(const void *), void *arg)  //регистрируем ресурс, передавая функцию, которая вернёт его системе и указатель на сам ресурс
 {
     cs->deallocatingUnits[cs->size++] = (GeneralizedUnit){ func, arg }; //записываем полученные указатели в стек и увеличиваем количество зарегистрированных ресурсов на 1
 }
@@ -58,5 +58,4 @@ void CompleteDeallocation(CleanupStack cs)   //полностью очищаем
     PartialDeallocation(cs, cs->size);
     free(cs->deallocatingUnits);
     free(cs);
-    cs = NULL;
 }
