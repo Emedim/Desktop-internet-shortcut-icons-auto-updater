@@ -4,6 +4,7 @@ call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDe
 
 cl src\main.c ^
    "src\cleanup interface.c"^
+   "src\ini parser.c"^
    /Zi ^
    /Od ^
    /W4 ^

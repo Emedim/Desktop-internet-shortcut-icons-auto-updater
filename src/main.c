@@ -15,11 +15,9 @@
 #define MAX_CURRENT_SYSTEM_RESOURCES (5)
 #define INICIAL_BUFFER_LENGTH (12)
 #define BUFFER_ADDITION (8)
-#define NEW_LINE_SYMBOL '\n'
-#define SPACE_SYMBOL ' '
 
 static void FatalError(const byte *message);
-static void ParceFileText(const byte *text, size_t textLength, byte *result);
+void ParceFileText(const byte *text, size_t textLength, byte **result);
 
 void Warp_FindClose(const void *arg);
 void Warp_CoTaskMemFree(const void *arg);
@@ -36,7 +34,7 @@ typedef struct tag_IconProcessUnit
 typedef struct tag_IconProcessContainer
 {
     IconProcessUnit *array;
-    size_t *occupedUnitsPtr;
+    size_t occupedUnits;
 } IconProcessContainer;
 
 
@@ -62,7 +60,7 @@ int main(void)
         NULL,
         &desktopPath
     );
-    PushCleanupStack(cleanupStack, Warp_CoTaskMemFree, &desktopPath);
+    PushCleanupStack(cleanupStack, Warp_CoTaskMemFree, &desktopPath);   //desktopPath освобождать даже в случае неудачи
 
     if (FAILED(desktopPathResult)) 
     {
@@ -94,33 +92,33 @@ int main(void)
     PushCleanupStack(cleanupStack, Warp_FindClose, &searchingFilesHandle);
     
     size_t processingFilesContainerLength = INICIAL_BUFFER_LENGTH;
-    size_t occupedProcessingFilesContainerUnits = 0;
-    IconProcessUnit *processingFilesContainer = malloc(processingFilesContainerLength * sizeof(IconProcessUnit));
-    if(!processingFilesContainer) // не NULL
+    IconProcessContainer iconProcessContainer = {0};
+    iconProcessContainer.array = malloc(processingFilesContainerLength * sizeof(IconProcessUnit));
+    if(!iconProcessContainer.array) // не NULL
     {
         FatalError("error of allocation heap");
         return STANDARD_ERROR;
     }
-    IconProcessContainer iconProcessContainer = {processingFilesContainer, &occupedProcessingFilesContainerUnits};
     PushCleanupStack(cleanupStack, Warp_Free_IconProcessContainer, &iconProcessContainer);
 
+    FILE *debug = fopen("C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug\\debug.txt", "wb"); //запишу сюда извлёченные данные для проверки
     do
     {
         //создать буффер для хранения информации о ярлыках
-        ++occupedProcessingFilesContainerUnits;
-        if (occupedProcessingFilesContainerUnits > processingFilesContainerLength)
+        ++iconProcessContainer.occupedUnits;
+        if (iconProcessContainer.occupedUnits > processingFilesContainerLength)
         {
             processingFilesContainerLength += BUFFER_ADDITION;
-            IconProcessUnit *temp = realloc(processingFilesContainer, processingFilesContainerLength * sizeof(IconProcessUnit)); //выделили новый массив, количество элементов: старое количество + немного ещё
+            IconProcessUnit *temp = realloc(iconProcessContainer.array, processingFilesContainerLength * sizeof(IconProcessUnit)); //выделили новый массив, количество элементов: старое количество + немного ещё
             if (!temp)  // temp == NULL
             {
-                --occupedProcessingFilesContainerUnits;
+                --iconProcessContainer.occupedUnits;
                 FatalError("error of allocation heap");
                 return STANDARD_ERROR;
             }
-            processingFilesContainer = temp;
+            iconProcessContainer.array = temp;
         }
-        processingFilesContainer[occupedProcessingFilesContainerUnits - 1].url = NULL;
+        iconProcessContainer.array[iconProcessContainer.occupedUnits - 1].url = NULL;
 
         LARGE_INTEGER fileSize;
         fileSize.LowPart = fileData.nFileSizeLow;
@@ -156,16 +154,25 @@ int main(void)
         PushCleanupStack(cleanupStack, Warp_Free, &fileContent);
 
         fread(fileContent, 1, fileSize.QuadPart, file);
-        ParceFileText(fileContent, fileSize.QuadPart, &(processingFilesContainer[occupedProcessingFilesContainerUnits - 1].url));
-        if (!processingFilesContainer[occupedProcessingFilesContainerUnits - 1].url)
+        ParceFileText(fileContent, fileSize.QuadPart, &(iconProcessContainer.array[iconProcessContainer.occupedUnits - 1].url));
+        if (!iconProcessContainer.array[iconProcessContainer.occupedUnits - 1].url)
         {
             PartialDeallocation(cleanupStack, 2);
             continue;
         }
+        
+        fwrite(
+            iconProcessContainer.array[iconProcessContainer.occupedUnits - 1].url,
+            sizeof(char),
+            strlen(iconProcessContainer.array[iconProcessContainer.occupedUnits - 1].url),
+            debug
+        );  //Для проверки закидываем в файл полученные данные.
 
         PartialDeallocation(cleanupStack, 2);
     }
     while (FindNextFileW(searchingFilesHandle, &fileData));
+
+    fclose(debug);  //закрытие файла дебага
 
     DWORD dwError = GetLastError();
     if (dwError != ERROR_NO_MORE_FILES)
@@ -175,7 +182,7 @@ int main(void)
     }
 
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
-    wprintf(L"\nИтого файлов: %d\n\n", occupedProcessingFilesContainerUnits);
+    wprintf(L"\nИтого файлов: %d\n\n", iconProcessContainer.occupedUnits);
     
     CompleteDeallocation(cleanupStack);
     return 0;
@@ -193,153 +200,6 @@ static void FatalError(const byte *message)
         NULL,
         MB_OK
     );
-}
-
-
-
-byte ToLower(byte symbol)
-{
-    if (symbol >= 65 && symbol <= 90) symbol += 32;
-    return symbol;
-}
-
-bool CompareSymbols(byte symbol1, byte symbol2)
-{
-    return ToLower(symbol1) == ToLower(symbol2);
-}
-
-typedef struct tag_BufferContext
-{
-    const byte *text;
-    const size_t textLength;
-    size_t seek;
-} BufferContext;
-
-//не закончился ли буффер
-#define BUFFER_NOT_FINISHED(ctx) ((ctx)->seek < (ctx)->textLength)
-//буфер закончился?
-#define BUFFER_FINISHED(ctx) ((ctx)->seek >= (ctx)->textLength)
-//сместить указатель на 1
-#define BUFFER_INCREASE_PTR(ctx) (++(ctx)->seek)
-//взять текущий байт
-#define BUFFER_CURRENT_SYMBOL(ctx) ((ctx)->text[(ctx)->seek])
-//САМ ОБЪЕКТ!
-//не закончился ли буффер
-#define BUFFER_NOT_FINISHED_OBJ(ctx) ((ctx).seek < (ctx).textLength)
-//буфер закончился?
-#define BUFFER_FINISHED_OBJ(ctx) ((ctx).seek >= (ctx).textLength)
-//сместить указатель на 1
-#define BUFFER_INCREASE_PTR_OBJ(ctx) (++(ctx).seek)
-//взять текущий байт
-#define BUFFER_CURRENT_SYMBOL_OBJ(ctx) ((ctx).text[(ctx).seek])
-
-const byte internetShortcut[] = "internetshortcut";
-const byte url[] = "url";
-
-static bool Condition_StopWhen(const BufferContext *bfctx, const byte symbol)
-{   return BUFFER_CURRENT_SYMBOL(bfctx) != symbol; }
-
-static bool Condition_ContinueWhile(const BufferContext *bfctx, const byte symbol)
-{   return BUFFER_CURRENT_SYMBOL(bfctx) == symbol; }
-
-static size_t SkipByCondition(BufferContext *bfctx, bool (*condition)(const BufferContext *, const byte), const byte symbol)
-{
-    size_t steps = 0;
-    while
-    (
-        BUFFER_NOT_FINISHED(bfctx) &&   //если буфер закончился, цикл продолжать нельзя
-        condition(bfctx, symbol)
-    )
-    {
-        BUFFER_INCREASE_PTR(bfctx);
-        ++steps;
-    }
-    return steps;
-}
-
-static size_t SkipCurrentLine(BufferContext *bfctx)
-{   //в винде в файлах перевод на новую строку состоит из комбинации символов: /r/n – порядок именно такой
-    size_t steps = SkipByCondition(bfctx, Condition_StopWhen, NEW_LINE_SYMBOL);
-    if (BUFFER_FINISHED(bfctx)) return steps;
-    BUFFER_INCREASE_PTR(bfctx);
-    return ++steps;
-}
-
-static bool CompareBufferToSubstring(BufferContext *bfctx, const byte interrupter, const byte *subString, const bool doSkipSpaces)
-{
-    bool sameSoFar = true;
-    size_t substringIndex = 0;
-    bool tempRun = true;
-    while(tempRun)
-    {
-        if (BUFFER_FINISHED(bfctx)) return false;
-        if
-        (
-            BUFFER_CURRENT_SYMBOL(bfctx) == interrupter &&
-            subString[substringIndex] == '\0'
-        )   tempRun = false;
-        else
-        {
-            sameSoFar = CompareSymbols(BUFFER_CURRENT_SYMBOL(bfctx), subString[substringIndex]);
-            tempRun = sameSoFar;
-            ++substringIndex;
-        }
-        BUFFER_INCREASE_PTR(bfctx);
-        if (doSkipSpaces) SkipByCondition(bfctx, Condition_ContinueWhile, SPACE_SYMBOL);
-    }
-    return sameSoFar;
-}
-
-static void ParceFileText(const byte *text, size_t textLength, byte **result)
-{
-    *result = NULL;
-    BufferContext bufferCtx = { text, textLength, 0 };
-    bool inTargetSection = false;
-    while (BUFFER_NOT_FINISHED_OBJ(bufferCtx))
-    {
-        if (BUFFER_CURRENT_SYMBOL_OBJ(bufferCtx) == '[')
-        {
-            if (inTargetSection) return; //началась новая секция
-            BUFFER_INCREASE_PTR_OBJ(bufferCtx);
-            bool same = CompareBufferToSubstring(&bufferCtx, ']', internetShortcut, false);
-            if (same) inTargetSection = true;
-            SkipCurrentLine(&bufferCtx);
-        }
-        if (BUFFER_FINISHED_OBJ(bufferCtx)) return;
-        if (inTargetSection)
-        {
-            bool same = CompareBufferToSubstring(&bufferCtx, '=', url, true);
-            if (same)
-            {
-                SkipByCondition(&bufferCtx, Condition_ContinueWhile, SPACE_SYMBOL);
-                size_t urlLength = SkipCurrentLine(&bufferCtx); //urlLength содержит длину строки, в которой есть ссылка и /r/n на конце
-                while 
-                (
-                    bufferCtx.text[bufferCtx.seek] == '\n' ||
-                    bufferCtx.text[bufferCtx.seek] == '\r'
-                )
-                {
-                    --bufferCtx.seek;
-                    --urlLength;
-                }
-                bufferCtx.seek -= urlLength;
-                if (!urlLength) return;
-                *result = malloc(urlLength + 1);    //для \0
-                if (*result)
-                {
-                    size_t tempIndex = 0;
-                    while(tempIndex < urlLength)
-                    {
-                        (*result)[tempIndex++] = BUFFER_CURRENT_SYMBOL_OBJ(bufferCtx);
-                        BUFFER_INCREASE_PTR_OBJ(bufferCtx);
-                    }
-                    (*result)[urlLength] = '\0';
-                }
-                return;
-            }
-        }
-        SkipCurrentLine(&bufferCtx);
-    }
 }
 
 
@@ -364,13 +224,14 @@ void Warp_Free(const void *arg)
 
 void Warp_Free_IconProcessContainer(const void *arg)
 {
-    IconProcessContainer realTypeArg = *(IconProcessContainer *)arg;
-    while (*realTypeArg.occupedUnitsPtr > 0)
+    IconProcessContainer *realTypeArg = (IconProcessContainer *)arg;
+    while (realTypeArg->occupedUnits > 0)
     {
-        --*realTypeArg.occupedUnitsPtr;
-        if (realTypeArg.array[*realTypeArg.occupedUnitsPtr].url) free(realTypeArg.array[*realTypeArg.occupedUnitsPtr].url);
+        --realTypeArg->occupedUnits;
+        if (realTypeArg->array[realTypeArg->occupedUnits].url) 
+            free(realTypeArg->array[realTypeArg->occupedUnits].url);
     }
-    free(realTypeArg.array);
+    free(realTypeArg->array);
 }
 
 void Warp_FClose(const void *arg)
