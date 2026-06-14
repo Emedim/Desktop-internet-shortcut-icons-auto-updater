@@ -1,10 +1,11 @@
 @echo off
 cd /d "%~dp0\.."
-call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat"
-
+call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+set "VCPKG=C:\non-system programs\vcpkg\installed\x64-windows"
 cl src\main.c ^
    "src\cleanup interface.c"^
    "src\ini parser.c"^
+   /I"%VCPKG%\include"^
    /Zi ^
    /Od ^
    /W4 ^
@@ -12,6 +13,8 @@ cl src\main.c ^
    /Fo:build\ ^
    /Fd:build\app.pdb ^
    /link ^
+   /LIBPATH:"%VCPKG%\lib" ^
+   libcurl.lib ^
    /PDB:build\app_link.pdb ^
    /INCREMENTAL:NO^
    user32.lib^

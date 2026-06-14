@@ -1,10 +1,11 @@
 #include <windows.h>
 #include <shlobj.h> //SHGetKnownFolderPath();
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <strsafe.h>    //StringCchCatW(); StringCchCopyW();
+
+#include <curl/curl.h>
 
 //для _setmode(_fileno(stdout), _O_U16TEXT);
 #include <io.h>
@@ -185,6 +186,18 @@ int main(void)
     wprintf(L"\nИтого файлов: %d\n\n", iconProcessContainer.occupedUnits);
     
     CompleteDeallocation(cleanupStack);
+
+
+    CURL *curl = curl_easy_init();
+
+    if (curl)
+    {
+        wprintf(L"libcurl\n");
+        curl_easy_cleanup(curl);
+    }
+    else wprintf(L"no libcurl\n");
+    
+    
     return 0;
 }
 
