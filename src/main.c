@@ -13,7 +13,7 @@
 
 #include "cleanup interface.h"
 #define STANDARD_ERROR (-1)
-#define MAX_CURRENT_SYSTEM_RESOURCES (5)
+#define MAX_CURRENT_SYSTEM_RESOURCES (6)
 #define INICIAL_BUFFER_LENGTH (12)
 #define BUFFER_ADDITION (8)
 
@@ -25,11 +25,13 @@ void Warp_CoTaskMemFree(const void *arg);
 void Warp_Free(const void *arg);
 void Warp_Free_IconProcessContainer(const void *arg);
 void Warp_FClose(const void *arg);
+void Warp_curl_global_cleanup(const void *arg);
 
 
 typedef struct tag_IconProcessUnit
 {
     byte *url;
+    CURL *easy;
 } IconProcessUnit;
 
 typedef struct tag_IconProcessContainer
@@ -37,6 +39,7 @@ typedef struct tag_IconProcessContainer
     IconProcessUnit *array;
     size_t occupedUnits;
     size_t capacity;
+    CURLM *multi;
 } IconProcessContainer;
 
 
@@ -93,7 +96,18 @@ int main(void)
     }
     PushCleanupStack(cleanupStack, Warp_FindClose, &searchingFilesHandle);
 
-    IconProcessContainer iconProcessContainer = {NULL, 0, INICIAL_BUFFER_LENGTH};
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+    {
+        FatalError("curl_global_init failed");
+        return STANDARD_ERROR;
+    }
+    PushCleanupStack(cleanupStack, &Warp_curl_global_cleanup, NULL);
+    IconProcessContainer iconProcessContainer = {NULL, 0, INICIAL_BUFFER_LENGTH, curl_multi_init()};
+    if (!iconProcessContainer.multi)
+    {
+        FatalError("error of libcurl initialization");
+        return STANDARD_ERROR;
+    }
     iconProcessContainer.array = malloc(iconProcessContainer.capacity * sizeof(IconProcessUnit));
     if(!iconProcessContainer.array)
     {
@@ -119,6 +133,7 @@ int main(void)
         }
         size_t current = iconProcessContainer.occupedUnits++;
         iconProcessContainer.array[current].url = NULL;
+        iconProcessContainer.array[current].easy = NULL;
 
 
         LARGE_INTEGER fileSize;
@@ -169,6 +184,15 @@ int main(void)
             debug
         );  //Для проверки закидываем в файл полученные данные.
 
+        iconProcessContainer.array[current].easy = curl_easy_init();
+        if (!iconProcessContainer.array[current].easy)
+        {
+            PartialDeallocation(cleanupStack, 2);
+            continue;
+        }
+        curl_easy_setopt(iconProcessContainer.array[current].easy, CURLOPT_URL, iconProcessContainer.array[current].url);
+        curl_multi_add_handle(iconProcessContainer.multi, iconProcessContainer.array[current].easy);
+
         PartialDeallocation(cleanupStack, 2);
     }
     while (FindNextFileW(searchingFilesHandle, &fileData));
@@ -186,18 +210,6 @@ int main(void)
     wprintf(L"\nИтого файлов: %d\n\n", iconProcessContainer.occupedUnits);
     
     CompleteDeallocation(cleanupStack);
-
-
-    CURL *curl = curl_easy_init();
-
-    if (curl)
-    {
-        wprintf(L"libcurl\n");
-        curl_easy_cleanup(curl);
-    }
-    else wprintf(L"no libcurl\n");
-    
-    
     return 0;
 }
 
@@ -241,9 +253,17 @@ void Warp_Free_IconProcessContainer(const void *arg)
     while (realTypeArg->occupedUnits > 0)
     {
         --realTypeArg->occupedUnits;
-        if (realTypeArg->array[realTypeArg->occupedUnits].url) 
+        if (realTypeArg->array[realTypeArg->occupedUnits].url)
+        {
             free(realTypeArg->array[realTypeArg->occupedUnits].url);
+            if(realTypeArg->array[realTypeArg->occupedUnits].easy)
+            {
+                curl_multi_remove_handle(realTypeArg->multi, realTypeArg->array[realTypeArg->occupedUnits].easy);
+                curl_easy_cleanup(realTypeArg->array[realTypeArg->occupedUnits].easy);
+            }
+        }
     }
+    curl_multi_cleanup(realTypeArg->multi);
     free(realTypeArg->array);
 }
 
@@ -251,4 +271,9 @@ void Warp_FClose(const void *arg)
 {
     FILE **realTypeArg = arg;
     fclose(*realTypeArg);
+}
+
+void Warp_curl_global_cleanup(const void *arg)
+{
+    curl_global_cleanup();
 }
