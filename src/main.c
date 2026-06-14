@@ -35,6 +35,7 @@ typedef struct tag_IconProcessContainer
 {
     IconProcessUnit *array;
     size_t occupedUnits;
+    size_t capacity;
 } IconProcessContainer;
 
 
@@ -90,11 +91,10 @@ int main(void)
         return STANDARD_ERROR;
     }
     PushCleanupStack(cleanupStack, Warp_FindClose, &searchingFilesHandle);
-    
-    size_t processingFilesContainerLength = INICIAL_BUFFER_LENGTH;
-    IconProcessContainer iconProcessContainer = {0};
-    iconProcessContainer.array = malloc(processingFilesContainerLength * sizeof(IconProcessUnit));
-    if(!iconProcessContainer.array) // не NULL
+
+    IconProcessContainer iconProcessContainer = {NULL, 0, INICIAL_BUFFER_LENGTH};
+    iconProcessContainer.array = malloc(iconProcessContainer.capacity * sizeof(IconProcessUnit));
+    if(!iconProcessContainer.array)
     {
         FatalError("error of allocation heap");
         return STANDARD_ERROR;
@@ -105,20 +105,20 @@ int main(void)
     do
     {
         //создать буффер для хранения информации о ярлыках
-        ++iconProcessContainer.occupedUnits;
-        if (iconProcessContainer.occupedUnits > processingFilesContainerLength)
+        if (iconProcessContainer.occupedUnits >= iconProcessContainer.capacity)
         {
-            processingFilesContainerLength += BUFFER_ADDITION;
-            IconProcessUnit *temp = realloc(iconProcessContainer.array, processingFilesContainerLength * sizeof(IconProcessUnit)); //выделили новый массив, количество элементов: старое количество + немного ещё
+            iconProcessContainer.capacity += BUFFER_ADDITION;
+            IconProcessUnit *temp = realloc(iconProcessContainer.array, iconProcessContainer.capacity * sizeof(IconProcessUnit)); //выделили новый массив, количество элементов: старое количество + немного ещё
             if (!temp)  // temp == NULL
             {
-                --iconProcessContainer.occupedUnits;
                 FatalError("error of allocation heap");
                 return STANDARD_ERROR;
             }
             iconProcessContainer.array = temp;
         }
-        iconProcessContainer.array[iconProcessContainer.occupedUnits - 1].url = NULL;
+        size_t current = iconProcessContainer.occupedUnits++;
+        iconProcessContainer.array[current].url = NULL;
+
 
         LARGE_INTEGER fileSize;
         fileSize.LowPart = fileData.nFileSizeLow;
@@ -138,7 +138,7 @@ int main(void)
             return STANDARD_ERROR;
         }
         
-        wprintf(L"File: %ls\n", fileData.cFileName);
+        wprintf(L"File: %ls\n", fileData.cFileName);    //показать файл
 
         //скопировать ini–текст из ярлыков
         FILE *file = _wfopen(absoluteFilePath, L"rb");
@@ -154,17 +154,17 @@ int main(void)
         PushCleanupStack(cleanupStack, Warp_Free, &fileContent);
 
         fread(fileContent, 1, fileSize.QuadPart, file);
-        ParceFileText(fileContent, fileSize.QuadPart, &(iconProcessContainer.array[iconProcessContainer.occupedUnits - 1].url));
-        if (!iconProcessContainer.array[iconProcessContainer.occupedUnits - 1].url)
+        ParceFileText(fileContent, fileSize.QuadPart, &(iconProcessContainer.array[current].url));
+        if (!iconProcessContainer.array[current].url)
         {
             PartialDeallocation(cleanupStack, 2);
             continue;
         }
         
         fwrite(
-            iconProcessContainer.array[iconProcessContainer.occupedUnits - 1].url,
+            iconProcessContainer.array[current].url,
             sizeof(char),
-            strlen(iconProcessContainer.array[iconProcessContainer.occupedUnits - 1].url),
+            strlen(iconProcessContainer.array[current].url),
             debug
         );  //Для проверки закидываем в файл полученные данные.
 

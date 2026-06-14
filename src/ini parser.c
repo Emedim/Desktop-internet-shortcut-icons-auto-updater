@@ -99,7 +99,6 @@ static bool CompareBufferToSubstring(BufferContext *bfctx, const byte interrupte
 
 void ParceFileText(const byte *text, size_t textLength, byte **result)
 {
-    *result = NULL;
     BufferContext bufferCtx = { text, textLength, 0 };
     bool inTargetSection = false;
     while (BUFFER_NOT_FINISHED_OBJ(bufferCtx))
