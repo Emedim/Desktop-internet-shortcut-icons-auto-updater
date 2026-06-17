@@ -17,6 +17,7 @@
 #define INICIAL_BUFFER_LENGTH (12)
 #define BUFFER_ADDITION (8)
 
+size_t WriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata);
 static void FatalError(const byte *message);
 void ParceFileText(const byte *text, size_t textLength, byte **result);
 
@@ -32,14 +33,15 @@ typedef struct tag_IconProcessUnit
 {
     byte *url;
     CURL *easy;
+    size_t receivedBytes;
 } IconProcessUnit;
 
 typedef struct tag_IconProcessContainer
 {
     IconProcessUnit *array;
+    CURLM *multi;
     size_t occupedUnits;
     size_t capacity;
-    CURLM *multi;
 } IconProcessContainer;
 
 
@@ -131,9 +133,10 @@ int main(void)
             }
             iconProcessContainer.array = temp;
         }
-        size_t current = iconProcessContainer.occupedUnits++;
-        iconProcessContainer.array[current].url = NULL;
-        iconProcessContainer.array[current].easy = NULL;
+        IconProcessUnit *currentUnit = &iconProcessContainer.array[iconProcessContainer.occupedUnits++];
+        currentUnit->url = NULL;
+        currentUnit->easy = NULL;
+        currentUnit->receivedBytes = 0;
 
 
         LARGE_INTEGER fileSize;
@@ -170,28 +173,30 @@ int main(void)
         PushCleanupStack(cleanupStack, Warp_Free, &fileContent);
 
         fread(fileContent, 1, fileSize.QuadPart, file);
-        ParceFileText(fileContent, fileSize.QuadPart, &(iconProcessContainer.array[current].url));
-        if (!iconProcessContainer.array[current].url)
+        ParceFileText(fileContent, fileSize.QuadPart, &currentUnit->url);
+        if (!currentUnit->url)
         {
             PartialDeallocation(cleanupStack, 2);
             continue;
         }
         
         fwrite(
-            iconProcessContainer.array[current].url,
+            currentUnit->url,
             sizeof(char),
-            strlen(iconProcessContainer.array[current].url),
+            strlen(currentUnit->url),
             debug
         );  //Для проверки закидываем в файл полученные данные.
 
-        iconProcessContainer.array[current].easy = curl_easy_init();
-        if (!iconProcessContainer.array[current].easy)
+        currentUnit->easy = curl_easy_init();
+        if (!currentUnit->easy)
         {
             PartialDeallocation(cleanupStack, 2);
             continue;
         }
-        curl_easy_setopt(iconProcessContainer.array[current].easy, CURLOPT_URL, iconProcessContainer.array[current].url);
-        curl_multi_add_handle(iconProcessContainer.multi, iconProcessContainer.array[current].easy);
+        curl_easy_setopt(currentUnit->easy, CURLOPT_URL, currentUnit->url);
+        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, currentUnit);
+        curl_multi_add_handle(iconProcessContainer.multi, currentUnit->easy);
 
         PartialDeallocation(cleanupStack, 2);
     }
@@ -215,6 +220,19 @@ int main(void)
 
 
 
+size_t WriteCallback
+(
+    char *ptr,      //указатель на пришедшие данные
+    size_t size,    //size * nmemb = количество пришедших байт
+    size_t nmemb,   
+    void *userdata  //пользовательские данные. Задаётся через curl_easy_setopt(easy, CURLOPT_WRITEDATA, somePtr). Я здесь получаю IconProcessUnit *
+){
+    IconProcessUnit *unit = (IconProcessUnit *)userdata;
+    unit->receivedBytes += size * nmemb;
+    printf("%zu\n", unit->receivedBytes);
+    return unit->receivedBytes;    //функция должна возвращать количество обработаных байтов
+}
+
 static void FatalError(const byte *message)
 {
     if (cleanupStack) CompleteDeallocation(cleanupStack);   //если cleanupStack не NULL
@@ -231,20 +249,17 @@ static void FatalError(const byte *message)
 
 void Warp_FindClose(const void *arg)
 {
-    HANDLE *realTypeArg = arg;
-    FindClose(*realTypeArg);
+    FindClose(*(HANDLE *)arg);
 }
 
 void Warp_CoTaskMemFree(const void *arg)
 {
-    PWSTR *realTypeArg = arg;
-    CoTaskMemFree(*realTypeArg);
+    CoTaskMemFree(*(PWSTR *)arg);
 }
 
 void Warp_Free(const void *arg)
 {
-    void **realTypeArg = arg;
-    free(*realTypeArg);
+    free(*(void **)arg);
 }
 
 void Warp_Free_IconProcessContainer(const void *arg)
@@ -269,8 +284,7 @@ void Warp_Free_IconProcessContainer(const void *arg)
 
 void Warp_FClose(const void *arg)
 {
-    FILE **realTypeArg = arg;
-    fclose(*realTypeArg);
+    fclose(*(FILE **)arg);
 }
 
 void Warp_curl_global_cleanup(const void *arg)
