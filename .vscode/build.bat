@@ -6,6 +6,7 @@ cl src\main.c ^
    "src\cleanup interface.c"^
    "src\ini parser.c"^
    /I"%VCPKG%\include"^
+   /utf-8^
    /Zi ^
    /Od ^
    /W4 ^

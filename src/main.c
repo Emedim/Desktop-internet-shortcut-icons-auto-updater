@@ -38,7 +38,7 @@ typedef struct tag_IconProcessUnit
 
 typedef struct tag_IconProcessContainer
 {
-    IconProcessUnit *array;
+    IconProcessUnit **array;
     CURLM *multi;
     size_t occupedUnits;
     size_t capacity;
@@ -49,7 +49,7 @@ CleanupStack cleanupStack = NULL;
 
 int main(void)
 {
-    _setmode(_fileno(stdout), _O_U16TEXT);  //CRT теперь печатает в консоль только unicode
+    _setmode(_fileno(stdout), _O_U16TEXT);  //CRT теперь печатает в консоль только utf-16
 
     cleanupStack = InitCleanupStack(MAX_CURRENT_SYSTEM_RESOURCES);
     if (cleanupStack == NULL)
@@ -68,7 +68,6 @@ int main(void)
         &desktopPath
     );
     PushCleanupStack(cleanupStack, Warp_CoTaskMemFree, &desktopPath);   //desktopPath освобождать даже в случае неудачи
-
     if (FAILED(desktopPathResult)) 
     {
         FatalError("Could not find path to desktop");
@@ -104,13 +103,13 @@ int main(void)
         return STANDARD_ERROR;
     }
     PushCleanupStack(cleanupStack, &Warp_curl_global_cleanup, NULL);
-    IconProcessContainer iconProcessContainer = {NULL, 0, INICIAL_BUFFER_LENGTH, curl_multi_init()};
+    IconProcessContainer iconProcessContainer = {NULL, curl_multi_init(), 0, INICIAL_BUFFER_LENGTH};
     if (!iconProcessContainer.multi)
     {
         FatalError("error of libcurl initialization");
         return STANDARD_ERROR;
     }
-    iconProcessContainer.array = malloc(iconProcessContainer.capacity * sizeof(IconProcessUnit));
+    iconProcessContainer.array = malloc(iconProcessContainer.capacity * sizeof(IconProcessUnit *));
     if(!iconProcessContainer.array)
     {
         FatalError("error of allocation heap");
@@ -118,14 +117,14 @@ int main(void)
     }
     PushCleanupStack(cleanupStack, Warp_Free_IconProcessContainer, &iconProcessContainer);
 
-    FILE *debug = fopen("C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug\\debug.txt", "wb"); //запишу сюда извлёченные данные для проверки
+    FILE *debug = _wfopen(L"C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug\\debug.txt", L"wb"); //запишу сюда извлёченные данные для проверки
     do
     {
         //создать буффер для хранения информации о ярлыках
         if (iconProcessContainer.occupedUnits >= iconProcessContainer.capacity)
         {
             iconProcessContainer.capacity += BUFFER_ADDITION;
-            IconProcessUnit *temp = realloc(iconProcessContainer.array, iconProcessContainer.capacity * sizeof(IconProcessUnit)); //выделили новый массив, количество элементов: старое количество + немного ещё
+            IconProcessUnit **temp = realloc(iconProcessContainer.array, iconProcessContainer.capacity * sizeof(IconProcessUnit *)); //выделили новый массив, количество элементов: старое количество + немного ещё
             if (!temp)  // temp == NULL
             {
                 FatalError("error of allocation heap");
@@ -133,11 +132,15 @@ int main(void)
             }
             iconProcessContainer.array = temp;
         }
-        IconProcessUnit *currentUnit = &iconProcessContainer.array[iconProcessContainer.occupedUnits++];
-        currentUnit->url = NULL;
+        IconProcessUnit *currentUnit = iconProcessContainer.array[iconProcessContainer.occupedUnits++] = malloc(sizeof(IconProcessUnit));
+        if (!currentUnit)
+        {
+            FatalError("error of allocation heap");
+            return STANDARD_ERROR;
+        }
         currentUnit->easy = NULL;
+        currentUnit->url = NULL;
         currentUnit->receivedBytes = 0;
-
 
         LARGE_INTEGER fileSize;
         fileSize.LowPart = fileData.nFileSizeLow;
@@ -157,7 +160,7 @@ int main(void)
             return STANDARD_ERROR;
         }
         
-        wprintf(L"File: %ls\n", fileData.cFileName);    //показать файл
+        wprintf(L"Файл: %ls\n", fileData.cFileName);    //показать файл
 
         //скопировать ini–текст из ярлыков
         FILE *file = _wfopen(absoluteFilePath, L"rb");
@@ -212,7 +215,7 @@ int main(void)
     }
 
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
-    wprintf(L"\nИтого файлов: %d\n\n", iconProcessContainer.occupedUnits);
+    wprintf(L"\nИтого файлов: %zd\n\n", iconProcessContainer.occupedUnits);
     
     CompleteDeallocation(cleanupStack);
     return 0;
@@ -226,11 +229,13 @@ size_t WriteCallback
     size_t size,    //size * nmemb = количество пришедших байт
     size_t nmemb,   
     void *userdata  //пользовательские данные. Задаётся через curl_easy_setopt(easy, CURLOPT_WRITEDATA, somePtr). Я здесь получаю IconProcessUnit *
-){
+)
+{
     IconProcessUnit *unit = (IconProcessUnit *)userdata;
-    unit->receivedBytes += size * nmemb;
+    size_t receivedBytes = size * nmemb;
+    unit->receivedBytes += receivedBytes;
     printf("%zu\n", unit->receivedBytes);
-    return unit->receivedBytes;    //функция должна возвращать количество обработаных байтов
+    return receivedBytes;    //функция должна возвращать количество обработаных байтов
 }
 
 static void FatalError(const byte *message)
@@ -267,16 +272,17 @@ void Warp_Free_IconProcessContainer(const void *arg)
     IconProcessContainer *realTypeArg = (IconProcessContainer *)arg;
     while (realTypeArg->occupedUnits > 0)
     {
-        --realTypeArg->occupedUnits;
-        if (realTypeArg->array[realTypeArg->occupedUnits].url)
+        IconProcessUnit *temp = realTypeArg->array[--realTypeArg->occupedUnits];
+        if (temp->url)
         {
-            free(realTypeArg->array[realTypeArg->occupedUnits].url);
-            if(realTypeArg->array[realTypeArg->occupedUnits].easy)
+            free(temp->url);
+            if(temp->easy)
             {
-                curl_multi_remove_handle(realTypeArg->multi, realTypeArg->array[realTypeArg->occupedUnits].easy);
-                curl_easy_cleanup(realTypeArg->array[realTypeArg->occupedUnits].easy);
+                curl_multi_remove_handle(realTypeArg->multi, temp->easy);
+                curl_easy_cleanup(temp->easy);
             }
         }
+        free(temp);
     }
     curl_multi_cleanup(realTypeArg->multi);
     free(realTypeArg->array);
