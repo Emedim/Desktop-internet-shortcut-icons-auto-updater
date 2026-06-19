@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <strsafe.h>    //StringCchCatW(); StringCchCopyW();
+#include <pathcch.h>    //PathCchRemoveFileSpec
 
 #include <curl/curl.h>
 
@@ -33,6 +34,7 @@ typedef struct tag_IconProcessUnit
 {
     byte *url;
     CURL *easy;
+    FILE *download;
     size_t receivedBytes;
 } IconProcessUnit;
 
@@ -58,9 +60,8 @@ int main(void)
         return STANDARD_ERROR;
     }
 
-    PWSTR desktopPath = NULL;
-    HRESULT desktopPathResult;
-    desktopPathResult = SHGetKnownFolderPath // взять путь до определённой папки
+    wchar_t *desktopPath = NULL;
+    HRESULT desktopPathResult = SHGetKnownFolderPath // взять путь до определённой папки
     (
         &FOLDERID_Desktop, // рабочий стол
         0,
@@ -73,8 +74,18 @@ int main(void)
         FatalError("Could not find path to desktop");
         return STANDARD_ERROR;
     }
-    
     wprintf(L"Путь к рабочему столу: %ls\n\n", desktopPath);   //показать путь к рабочему столу
+    wchar_t cwd[MAX_PATH];
+    if
+    (
+        !GetCurrentDirectoryW(MAX_PATH, cwd) ||
+        PathCchRemoveFileSpec(cwd, MAX_PATH) != S_OK
+    )
+    {
+        FatalError("Could not find path to desktop");
+        return STANDARD_ERROR;
+    }
+    wprintf(L"Рабочая директория без bin: %ls\n\n", cwd);
     
     //приведение пути к рабочему столу к виду, пригодному для передачи в FindFirstFileW для поиска файлов на рабочем столе
     wchar_t searchPath[MAX_PATH];
@@ -140,6 +151,7 @@ int main(void)
         }
         currentUnit->easy = NULL;
         currentUnit->url = NULL;
+        currentUnit->download = NULL;
         currentUnit->receivedBytes = 0;
 
         LARGE_INTEGER fileSize;
@@ -148,19 +160,25 @@ int main(void)
 
         //получить абсолютный путь до ярлыка
         wchar_t absoluteFilePath[MAX_PATH];
-        
+        if (FAILED(StringCchPrintfW(absoluteFilePath, MAX_PATH, L"%ls\\%ls", desktopPath, fileData.cFileName)))
+        {
+            FatalError("error of pathes");
+            return STANDARD_ERROR;
+        }
+        wchar_t absoluteDownloadFilePath[MAX_PATH];
         if
         (
-            StringCchCopyW(absoluteFilePath, MAX_PATH, desktopPath) != S_OK ||
-            StringCchCatW(absoluteFilePath, MAX_PATH, L"\\") != S_OK ||
-            StringCchCatW(absoluteFilePath, MAX_PATH, fileData.cFileName) != S_OK
+            FAILED(StringCchPrintfW(absoluteDownloadFilePath, MAX_PATH, L"%ls\\debug\\download\\%ls", cwd, fileData.cFileName)) ||
+            PathCchRenameExtension(absoluteDownloadFilePath, MAX_PATH, L"txt") != S_OK
         )
         {
             FatalError("error of pathes");
             return STANDARD_ERROR;
         }
         
-        wprintf(L"Файл: %ls\n", fileData.cFileName);    //показать файл
+        wprintf(L"Файл: %ls\n", fileData.cFileName);        //показать файл
+        wprintf(L"Путь: %ls\n", absoluteFilePath);
+        wprintf(L"Дебаг: %ls\n\n", absoluteDownloadFilePath);
 
         //скопировать ini–текст из ярлыков
         FILE *file = _wfopen(absoluteFilePath, L"rb");
@@ -190,8 +208,13 @@ int main(void)
             debug
         );  //Для проверки закидываем в файл полученные данные.
 
-        currentUnit->easy = curl_easy_init();
-        if (!currentUnit->easy)
+        if (!(currentUnit->download = _wfopen(absoluteDownloadFilePath, L"wb")))
+        {
+            PartialDeallocation(cleanupStack, 2);
+            continue;
+        }
+        
+        if (!(currentUnit->easy = curl_easy_init()))
         {
             PartialDeallocation(cleanupStack, 2);
             continue;
@@ -234,7 +257,7 @@ size_t WriteCallback
     IconProcessUnit *unit = (IconProcessUnit *)userdata;
     size_t receivedBytes = size * nmemb;
     unit->receivedBytes += receivedBytes;
-    printf("%zu\n", unit->receivedBytes);
+    fwrite(ptr, 1, receivedBytes, unit->download);
     return receivedBytes;    //функция должна возвращать количество обработаных байтов
 }
 
@@ -259,7 +282,7 @@ void Warp_FindClose(const void *arg)
 
 void Warp_CoTaskMemFree(const void *arg)
 {
-    CoTaskMemFree(*(PWSTR *)arg);
+    CoTaskMemFree(*(wchar_t **)arg);
 }
 
 void Warp_Free(const void *arg)
@@ -276,10 +299,14 @@ void Warp_Free_IconProcessContainer(const void *arg)
         if (temp->url)
         {
             free(temp->url);
-            if(temp->easy)
+            if (temp->download)
             {
-                curl_multi_remove_handle(realTypeArg->multi, temp->easy);
-                curl_easy_cleanup(temp->easy);
+                fclose(temp->download);
+                if(temp->easy)
+                {
+                    curl_multi_remove_handle(realTypeArg->multi, temp->easy);
+                    curl_easy_cleanup(temp->easy);
+                }
             }
         }
         free(temp);

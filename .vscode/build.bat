@@ -20,6 +20,7 @@ cl src\main.c ^
    /INCREMENTAL:NO^
    user32.lib^
    Shell32.lib^
+   Pathcch.lib^
    Ole32.lib
 
 rem /Zi     – включает отладочную информацию
@@ -36,5 +37,6 @@ rem /INCREMENTAL: – отключает появление .ilk файла, у�
 
 rem user32.lib    – подключение библиотеки
 rem Shell32.lib   – подключение библиотеки
+rem Pathcch.lib   – для absoluteDebugFilePath()
 rem Ole32.lib     – подключение библиотеки
 
