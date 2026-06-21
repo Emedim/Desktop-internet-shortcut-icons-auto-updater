@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0\.."
-call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
 set "VCPKG=C:\non-system programs\vcpkg\installed\x64-windows"
 cl src\main.c ^
    "src\cleanup interface.c"^

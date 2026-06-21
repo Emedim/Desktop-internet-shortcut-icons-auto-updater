@@ -25,12 +25,12 @@ void ParceFileText(const byte *text, size_t textLength, byte **result);
 void Warp_FindClose(const void *arg);
 void Warp_CoTaskMemFree(const void *arg);
 void Warp_Free(const void *arg);
-void Warp_Free_IconProcessContainer(const void *arg);
+void Warp_Free_iconsProcessContainer(const void *arg);
 void Warp_FClose(const void *arg);
 void Warp_curl_global_cleanup(const void *arg);
 
 
-typedef struct tag_IconProcessUnit
+typedef struct
 {
     byte *url;
     CURL *easy;
@@ -38,13 +38,13 @@ typedef struct tag_IconProcessUnit
     size_t receivedBytes;
 } IconProcessUnit;
 
-typedef struct tag_IconProcessContainer
+typedef struct
 {
     IconProcessUnit **array;
     CURLM *multi;
     size_t occupedUnits;
     size_t capacity;
-} IconProcessContainer;
+} IconsProcessContainer;
 
 
 CleanupStack cleanupStack = NULL;
@@ -74,7 +74,7 @@ int main(void)
         FatalError("Could not find path to desktop");
         return STANDARD_ERROR;
     }
-    wprintf(L"Путь к рабочему столу: %ls\n\n", desktopPath);   //показать путь к рабочему столу
+    wprintf(L"Путь к рабочему столу: %ls\n", desktopPath);   //показать путь к рабочему столу
     wchar_t cwd[MAX_PATH];
     if
     (
@@ -85,7 +85,7 @@ int main(void)
         FatalError("Could not find path to desktop");
         return STANDARD_ERROR;
     }
-    wprintf(L"Рабочая директория без bin: %ls\n\n", cwd);
+    wprintf(L"Рабочая директория без bin: %ls\n\n\n", cwd);
     
     //приведение пути к рабочему столу к виду, пригодному для передачи в FindFirstFileW для поиска файлов на рабочем столе
     wchar_t searchPath[MAX_PATH];
@@ -114,36 +114,36 @@ int main(void)
         return STANDARD_ERROR;
     }
     PushCleanupStack(cleanupStack, &Warp_curl_global_cleanup, NULL);
-    IconProcessContainer iconProcessContainer = {NULL, curl_multi_init(), 0, INICIAL_BUFFER_LENGTH};
-    if (!iconProcessContainer.multi)
+    IconsProcessContainer iconsProcessContainer = {NULL, curl_multi_init(), 0, INICIAL_BUFFER_LENGTH};
+    if (!iconsProcessContainer.multi)
     {
         FatalError("error of libcurl initialization");
         return STANDARD_ERROR;
     }
-    iconProcessContainer.array = malloc(iconProcessContainer.capacity * sizeof(IconProcessUnit *));
-    if(!iconProcessContainer.array)
+    iconsProcessContainer.array = malloc(iconsProcessContainer.capacity * sizeof(IconProcessUnit *));
+    if(!iconsProcessContainer.array)
     {
         FatalError("error of allocation heap");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Warp_Free_IconProcessContainer, &iconProcessContainer);
+    PushCleanupStack(cleanupStack, Warp_Free_iconsProcessContainer, &iconsProcessContainer);
 
     FILE *debug = _wfopen(L"C:\\Users\\emedi\\Documents\\Проекты по программированию\\Complex projects\\Desktop icons auto updater\\debug\\debug.txt", L"wb"); //запишу сюда извлёченные данные для проверки
     do
     {
         //создать буффер для хранения информации о ярлыках
-        if (iconProcessContainer.occupedUnits >= iconProcessContainer.capacity)
+        if (iconsProcessContainer.occupedUnits >= iconsProcessContainer.capacity)
         {
-            iconProcessContainer.capacity += BUFFER_ADDITION;
-            IconProcessUnit **temp = realloc(iconProcessContainer.array, iconProcessContainer.capacity * sizeof(IconProcessUnit *)); //выделили новый массив, количество элементов: старое количество + немного ещё
+            iconsProcessContainer.capacity += BUFFER_ADDITION;
+            IconProcessUnit **temp = realloc(iconsProcessContainer.array, iconsProcessContainer.capacity * sizeof(IconProcessUnit *)); //выделили новый массив, количество элементов: старое количество + немного ещё
             if (!temp)  // temp == NULL
             {
                 FatalError("error of allocation heap");
                 return STANDARD_ERROR;
             }
-            iconProcessContainer.array = temp;
+            iconsProcessContainer.array = temp;
         }
-        IconProcessUnit *currentUnit = iconProcessContainer.array[iconProcessContainer.occupedUnits++] = malloc(sizeof(IconProcessUnit));
+        IconProcessUnit *currentUnit = iconsProcessContainer.array[iconsProcessContainer.occupedUnits++] = malloc(sizeof(IconProcessUnit));
         if (!currentUnit)
         {
             FatalError("error of allocation heap");
@@ -219,10 +219,14 @@ int main(void)
             PartialDeallocation(cleanupStack, 2);
             continue;
         }
-        curl_easy_setopt(currentUnit->easy, CURLOPT_URL, currentUnit->url);
-        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, currentUnit);
-        curl_multi_add_handle(iconProcessContainer.multi, currentUnit->easy);
+        curl_easy_setopt(currentUnit->easy, CURLOPT_URL, currentUnit->url);         //url по которому обращаться
+        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEFUNCTION, WriteCallback);  //колбек когда приходят данные
+        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, currentUnit);        //параметр, с которым вызывается колбек
+        curl_easy_setopt(currentUnit->easy, CURLOPT_PRIVATE, currentUnit);          //ассоциация easy с IconProcessUnit
+        curl_easy_setopt(currentUnit->easy, CURLOPT_TIMEOUT, 15L);                  //Запрос длиться не более 15 секунд
+        curl_easy_setopt(currentUnit->easy, CURLOPT_FOLLOWLOCATION, 1L);            //Редиректы
+        curl_multi_add_handle(iconsProcessContainer.multi, currentUnit->easy);
+        
 
         PartialDeallocation(cleanupStack, 2);
     }
@@ -236,9 +240,31 @@ int main(void)
         FatalError("Unknown error of searching files");
         return STANDARD_ERROR;
     }
+    wprintf(L"\nИтого файлов на рабочем столе: %zd\n\n", iconsProcessContainer.occupedUnits);
 
+    wprintf(L"\nНачало запросов...\n");
+    int runningHandles;
+    do
+    {
+        if(curl_multi_perform(iconsProcessContainer.multi, &runningHandles) != CURLM_OK)
+        {
+            FatalError("curl_multi_perform error");
+            return STANDARD_ERROR;
+        }
+        // curl_multi_wait(iconsProcessContainer.multi, NULL, 0, 1000, NULL);
+
+        // CURLMsg *curlMsg;
+        // int curlMsgLeft;
+
+        // while ((curlMsg = curl_multi_info_read(iconsProcessContainer.multi, &curlMsgLeft)))
+        // {
+
+        // }
+    }
+    while (runningHandles);
+    wprintf(L"\nЗапросы завершены.\n");
+    
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
-    wprintf(L"\nИтого файлов: %zd\n\n", iconProcessContainer.occupedUnits);
     
     CompleteDeallocation(cleanupStack);
     return 0;
@@ -290,9 +316,9 @@ void Warp_Free(const void *arg)
     free(*(void **)arg);
 }
 
-void Warp_Free_IconProcessContainer(const void *arg)
+void Warp_Free_iconsProcessContainer(const void *arg)
 {
-    IconProcessContainer *realTypeArg = (IconProcessContainer *)arg;
+    IconsProcessContainer *realTypeArg = (IconsProcessContainer *)arg;
     while (realTypeArg->occupedUnits > 0)
     {
         IconProcessUnit *temp = realTypeArg->array[--realTypeArg->occupedUnits];
