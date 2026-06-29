@@ -33,7 +33,6 @@ typedef struct
     byte *url;
     CURL *easy;
     FILE *download;
-    size_t receivedBytes;
 } IconProcessUnit;
 
 typedef struct
@@ -166,7 +165,6 @@ int main(void)
         currentUnit->easy = NULL;
         currentUnit->url = NULL;
         currentUnit->download = NULL;
-        currentUnit->receivedBytes = 0;
 
         LARGE_INTEGER fileSize;
         fileSize.LowPart = fileData.nFileSizeLow;
@@ -233,15 +231,14 @@ int main(void)
             PartialDeallocation(cleanupStack, 2);
             continue;
         }
-        curl_easy_setopt(currentUnit->easy, CURLOPT_URL, currentUnit->url);         //url по которому обращаться
+        curl_easy_setopt(currentUnit->easy, CURLOPT_URL, currentUnit->url);             //url по которому обращаться
         curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEFUNCTION, CurlWriteCallback);  //колбек когда приходят данные
-        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, currentUnit);        //параметр, с которым вызывается колбек
-        curl_easy_setopt(currentUnit->easy, CURLOPT_PRIVATE, currentUnit);          //ассоциация easy с IconProcessUnit
-        curl_easy_setopt(currentUnit->easy, CURLOPT_TIMEOUT, 15L);                  //Запрос длиться не более 15 секунд
-        curl_easy_setopt(currentUnit->easy, CURLOPT_FOLLOWLOCATION, 1L);            //Редиректы
+        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, currentUnit);            //параметр, с которым вызывается колбек
+        curl_easy_setopt(currentUnit->easy, CURLOPT_PRIVATE, currentUnit);              //ассоциация easy с IconProcessUnit
+        curl_easy_setopt(currentUnit->easy, CURLOPT_TIMEOUT, 15L);                      //Запрос длиться не более 15 секунд
+        curl_easy_setopt(currentUnit->easy, CURLOPT_FOLLOWLOCATION, 1L);                //Редиректы
         curl_multi_add_handle(iconsProcessContainer.multi, currentUnit->easy);
         
-
         PartialDeallocation(cleanupStack, 2);
         fprintf(log, "[DEBUG] Successfuly processed\n");
     }
@@ -255,7 +252,7 @@ int main(void)
     fprintf(log, "[INFO] Processed files: %zd\n", iconsProcessContainer.occupedUnits);
 
     fprintf(log, "[DEBUG] Started transfers cycle ...\n");
-    int runningHandles;
+    int runningHandles; //склько запросов ещё НЕ завершились
     do
     {
         if(curl_multi_perform(iconsProcessContainer.multi, &runningHandles) != CURLM_OK)
@@ -263,18 +260,29 @@ int main(void)
             FatalError("curl_multi_perform() failed");
             return STANDARD_ERROR;
         }
-        // curl_multi_wait(iconsProcessContainer.multi, NULL, 0, 1000, NULL);
+        curl_multi_wait(iconsProcessContainer.multi, NULL, 0, 1000, NULL);
 
-        // CURLMsg *curlMsg;
-        // int curlMsgLeft;
-
-        // while ((curlMsg = curl_multi_info_read(iconsProcessContainer.multi, &curlMsgLeft)))
-        // {
-
-        // }
+        CURLMsg *curlMsg;
+        int curlMsgLeft;
+        while (curlMsg = curl_multi_info_read(iconsProcessContainer.multi, &curlMsgLeft))
+        {
+            if (curlMsg->msg == CURLMSG_DONE)
+            {
+                fprintf(log, "\n|==================================================================================|\n\n");
+                CURL *easy = curlMsg->easy_handle;  //завершенный easy
+                IconProcessUnit *ipu = NULL;
+                if 
+                (
+                    curl_easy_getinfo(easy, CURLINFO_PRIVATE, &ipu) != CURLE_OK ||
+                    !ipu
+                ) fprintf(log, "[ERROR] Could not get info from curl easy handle. curl_easy_getinfo() failed");
+                else fprintf(log, "[DEBUG] transfer finished. URL: %s", ipu->url);
+                fprintf(log, "\n                     Exit code: %s\n", curl_easy_strerror(curlMsg->data.result));
+            }
+        }
     }
     while (runningHandles);
-    fprintf(log, "[DEBUG] transfers cycle finished\n");
+    fprintf(log, "\n|==================================================================================|\n\n[DEBUG] transfers cycle finished\n");
     
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
     CompleteDeallocation(cleanupStack);
@@ -293,15 +301,14 @@ size_t CurlWriteCallback
 {
     IconProcessUnit *unit = (IconProcessUnit *)userdata;
     size_t receivedBytes = size * nmemb;
-    unit->receivedBytes += receivedBytes;
-    fwrite(ptr, 1, receivedBytes, unit->download);
+    fwrite(ptr, 1, receivedBytes, unit->download);  
     return receivedBytes;    //функция должна возвращать количество обработаных байтов
 }
 
 char *WstringTo_utf8(const wchar_t *wstr)
 {
     int size = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
-    if (!size) return NULL;
+    if (!size) return NULL; 
     char *utf8 = malloc(size);
     if (!utf8) return NULL;
     if (!WideCharToMultiByte(CP_UTF8, 0, wstr, -1, utf8, size, NULL, NULL))
@@ -320,7 +327,7 @@ void LogWsting(const char *format, const wchar_t *wstr, const char *var)
         fprintf(log, format, tempMessage_utf8);
         free(tempMessage_utf8);
     }
-    else fprintf(log, "[ERROR] Could not convert (wchar_t *)%s to utf-8. Error of WstringTo_utf8()\n", var);
+    else fprintf(log, "[ERROR] Could not convert (wchar_t *)%s to utf-8. WstringTo_utf8() failed\n", var);
 }
 
 static void FatalError(const byte *message)
