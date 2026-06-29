@@ -16,7 +16,7 @@
 
 size_t CurlWriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata);
 static void FatalError(const byte *message);
-void ParceFileText(const byte *text, size_t textLength, byte **result);
+byte *ParceFileText(const byte *text, size_t textLength);
 char *WstringTo_utf8(const wchar_t *wstr);      // возвращает либо указатель на готовую конвертированную строку, либо NULL
 void LogWsting(const char *format, const wchar_t *wstr, const char *var);
 
@@ -74,7 +74,7 @@ int main(void)
         FatalError("StringCchPrintfW() failed");
         return STANDARD_ERROR;
     }
-    if (!(log = _wfopen(logPath, L"w")))
+    if (!(log = _wfopen(logPath, L"wb")))
     {
         FatalError("could not open .log file");
         return STANDARD_ERROR;
@@ -211,7 +211,7 @@ int main(void)
         PushCleanupStack(cleanupStack, Warp_Free, &fileContent);
 
         fread(fileContent, 1, fileSize.QuadPart, file);
-        ParceFileText(fileContent, fileSize.QuadPart, &currentUnit->url);
+        currentUnit->url = ParceFileText(fileContent, fileSize.QuadPart);
         if (!currentUnit->url)
         {
             fprintf(log, "[ERROR] Could parse .url content. ParceFileText() failed\n");
@@ -219,7 +219,7 @@ int main(void)
             continue;
         }
         fprintf(log, "[DEBUG] Got url: %s\n", currentUnit->url);
-        
+
         if (!(currentUnit->download = _wfopen(absoluteDownloadFilePath, L"wb")))
         {
             fprintf(log, "[ERROR] Could not open debug file to process url. _wfopen() failed\n");
@@ -327,7 +327,7 @@ static void FatalError(const byte *message)
 {
     if(log)
     {
-        fprintf(log, "[FATAL ERROR] %ls\n", message);
+        fprintf(log, "[FATAL ERROR] %s\n", message);
         MessageBoxA(NULL, "The program terminated due to a fatal error. See the log file for details.", NULL, MB_OK);
     } 
     else MessageBoxA(NULL, message, NULL, MB_OK);

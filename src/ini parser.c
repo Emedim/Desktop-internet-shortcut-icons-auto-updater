@@ -1,8 +1,9 @@
 #include <stdbool.h>
 #include <windows.h>
 
-#define NEW_LINE_SYMBOL '\n'
-#define SPACE_SYMBOL ' '
+#define LF '\n'
+#define CR '\r'
+#define SPACE ' '
 
 byte ToLower(byte symbol)
 {
@@ -15,7 +16,7 @@ bool CompareSymbols(byte symbol1, byte symbol2)
     return ToLower(symbol1) == ToLower(symbol2);
 }
 
-typedef struct tag_BufferContext
+typedef struct
 {
     const byte *text;
     const size_t textLength;
@@ -66,7 +67,7 @@ static size_t SkipByCondition(BufferContext *bfctx, bool (*condition)(const Buff
 
 static size_t SkipCurrentLine(BufferContext *bfctx)
 {   //в винде в файлах перевод на новую строку состоит из комбинации символов: /r/n – порядок именно такой
-    size_t steps = SkipByCondition(bfctx, Condition_StopWhen, NEW_LINE_SYMBOL);
+    size_t steps = SkipByCondition(bfctx, Condition_StopWhen, LF);
     if (BUFFER_FINISHED(bfctx)) return steps;
     BUFFER_INCREASE_PTR(bfctx);
     return ++steps;
@@ -85,19 +86,14 @@ static bool CompareBufferToSubstring(BufferContext *bfctx, const byte interrupte
             BUFFER_CURRENT_SYMBOL(bfctx) == interrupter &&
             subString[substringIndex] == '\0'
         )   tempRun = false;
-        else
-        {
-            sameSoFar = CompareSymbols(BUFFER_CURRENT_SYMBOL(bfctx), subString[substringIndex]);
-            tempRun = sameSoFar;
-            ++substringIndex;
-        }
+        else tempRun = sameSoFar = CompareSymbols(BUFFER_CURRENT_SYMBOL(bfctx), subString[substringIndex++]);
         BUFFER_INCREASE_PTR(bfctx);
-        if (doSkipSpaces) SkipByCondition(bfctx, Condition_ContinueWhile, SPACE_SYMBOL);
+        if (doSkipSpaces) SkipByCondition(bfctx, Condition_ContinueWhile, SPACE);
     }
     return sameSoFar;
 }
 
-void ParceFileText(const byte *text, size_t textLength, byte **result)
+byte *ParceFileText(const byte *text, size_t textLength)
 {
     BufferContext bufferCtx = { text, textLength, 0 };
     bool inTargetSection = false;
@@ -105,43 +101,35 @@ void ParceFileText(const byte *text, size_t textLength, byte **result)
     {
         if (BUFFER_CURRENT_SYMBOL_OBJ(bufferCtx) == '[')
         {
-            if (inTargetSection) return; //началась новая секция
+            if (inTargetSection) return NULL; //началась новая секция
             BUFFER_INCREASE_PTR_OBJ(bufferCtx);
             bool same = CompareBufferToSubstring(&bufferCtx, ']', internetShortcut, false);
             if (same) inTargetSection = true;
             SkipCurrentLine(&bufferCtx);
         }
-        if (BUFFER_FINISHED_OBJ(bufferCtx)) return;
+        if (BUFFER_FINISHED_OBJ(bufferCtx)) return NULL;
         if (inTargetSection)
         {
             bool same = CompareBufferToSubstring(&bufferCtx, '=', url, true);
             if (same)
             {
-                SkipByCondition(&bufferCtx, Condition_ContinueWhile, SPACE_SYMBOL);
+                SkipByCondition(&bufferCtx, Condition_ContinueWhile, SPACE);
                 size_t urlLength = SkipCurrentLine(&bufferCtx); //urlLength содержит длину строки, в которой есть ссылка и /r/n на конце
-                while 
-                (
-                    bufferCtx.text[bufferCtx.seek] == '\n' ||
-                    bufferCtx.text[bufferCtx.seek] == '\r'
-                )
-                {
-                    --bufferCtx.seek;
-                    --urlLength;
-                }
                 bufferCtx.seek -= urlLength;
-                if (!urlLength) return;
-                *result = malloc(urlLength + 1);    //для \0
-                if (*result)
+                if (!urlLength) return NULL;
+                byte *result = malloc(--urlLength); //urlLength содержит длинну с переносом на новую строку (CRLF) Нам нужно убрать перенос (-2 байта), но оставить место под \0 (+1 байт)
+                if (result)
                 {
+                    --urlLength;    //в цикле нам нужно скопировать ссылку, но urlLenth имел на 1 байт больше, чем длинна ссылки. Нам это нужно было, что бы выделить память под длинну ссылки + \0
                     size_t tempIndex = 0;
                     while(tempIndex < urlLength)
                     {
-                        (*result)[tempIndex++] = BUFFER_CURRENT_SYMBOL_OBJ(bufferCtx);
+                        result[tempIndex++] = BUFFER_CURRENT_SYMBOL_OBJ(bufferCtx);
                         BUFFER_INCREASE_PTR_OBJ(bufferCtx);
                     }
-                    (*result)[urlLength] = '\0';
+                    result[urlLength] = '\0';
                 }
-                return;
+                return result;
             }
         }
         SkipCurrentLine(&bufferCtx);

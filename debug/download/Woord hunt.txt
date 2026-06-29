@@ -1,0 +1,83 @@
+<!DOCTYPE html> <html lang="ru"> <head> <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/> <link rel="stylesheet" type="text/css" href="https://wooordhunt.ru/js/magnific-popup/magnific-popup.css" />
+<title>WooordHunt (Вордхант) — ваш помощник в мире английского языка</title> <meta name="description" content="На сайте вы найдёте англо-русский и русско-английский словари, упражнения для запоминания английских слов, редактор, который поможет написать текст на английском, и другие сервисы."/> <meta name="keywords" content="английский, язык, упражнения, перевод, произношение, транскрипция, словарь, слова, учить, запоминать"/> <meta name="viewport" content="width=device-width, initial-scale=1"/>  <link rel="search" type="application/opensearchdescription+xml" title="WooordHunt" href="/opensearch.xml"/> <meta name="google" content="notranslate"> <!--PWA & icons --> <!-- Android --> <meta name="mobile-web-app-capable" content="yes"> <!-- iOS --> <meta name="apple-mobile-web-app-capable" content="yes"> <meta name="apple-mobile-web-app-status-bar-style" content="default"> <meta name="apple-mobile-web-app-title" content="WooordHunt"> <meta name="theme-color" content="#ffffff">   <link rel="canonical" href="https://wooordhunt.ru"/>   <!-- Icons --> <link rel="icon" href="/favicon.ico" type="image/x-icon"> <link rel="icon" href="/favicon.svg" type="image/svg+xml"> <link rel="apple-touch-icon" href="/images/icons/apple-touch-icon.png"/> <link rel="manifest" href="/openscripts/pwa/manifest.json"> <!--PWA & icons END --> <link rel="stylesheet" type="text/css" href="/css/style_pc.css?v=16102025"/>  <link rel="stylesheet" title="colorScheme" type="text/css" href="/css/theme_day.css?v=16102025"/>   <script> isGuest = 1; isEduDemo = 0; </script> <style type="text/css">  html{font-size:18px;}  </style>  <script>window.yaContextCb=window.yaContextCb||[]</script> <script src="https://yandex.ru/ads/system/context.js" async></script> <script type="text/javascript" src="https://s3.wi-fi.ru/mtt/configs/sites/wooordhunt.js" async nocache></script>  </head> <body> <!-- Yandex.Metrika counter --> <script type="text/javascript">     (function(m,e,t,r,i,k,a){         m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};         m[i].l=1*new Date();         for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}         k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)     })(window, document,'script','https://mc.yandex.ru/metrika/tag.js', 'ym');      ym(25178906, 'init', {referrer: document.referrer, url: location.href, accurateTrackBounce:true, trackLinks:true}); </script> <noscript><div><img src="https://mc.yandex.ru/watch/25178906" style="position:absolute; left:-9999px;" alt="" /></div></noscript> <!-- /Yandex.Metrika counter -->    <!-- <div style="background-color:#e7e7e7; padding: 3px 0px 5px 0px; text-align: center;"> <a href="/page/view/crash">О сбоях в работе сайта.</a></div> --> <div id="header"> <div id="header_container"> <div id="logo"><a href="/"><img src="/images/logo.png" alt="logo"/></a></div> <div id="search_box"> <form action="/word/postsearch" method="post" id="hunted_word_form"> <table> <tr> <td><input type="text" id="hunted_word" required placeholder="Слово или словосочетание" value="" name="word" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" /></td> <td><input type="submit" class="submit" value="Найти" id="hunted_word_submit" /></td> </tr> </table> </form> <div id="word_tips"></div> </div> <div id="profile"> <a href="/user/preentry">Личный кабинет</a><br/> </div> <div class="clear"></div> </div> </div> <div id="main_layout"> <div id="column_left"> <div id="word_history_box"></div><br/> <div id="adv_left_block"></div> </div> <div id="container"> <div id="menu_box"> <div id="menu"> <ul> <li><b>Главная</b></li> <li><a href="/edu/start" style="">Упражнения</a></li> <li><a href="/editor/fx" style="">Редактор</a></li> <li><a href="/dic/correctionlistapproved" style="">Правки</a></li> <li><a href="/page/view/extensions" style="">Разное</a></li> <li><b onclick="openPrjDialog('change_font_dialog_pc');" id="decor_dialog">Оформление</b></li> </ul> </div> </div> <div id="dialog_win_bar"> <div id="dialog_win_box"> <div id="dialog_win_close"><span onclick="closePrjDialog()"><img src="/images/svg/cross_01.svg" width="22"></span></div> <div id="dialog_win_data"></div> </div> </div> <div id="content"><div class="info_block">
+
+<h1>WooordHunt &mdash; ваш помощник в мире английского языка</h1>
+ <div class="notice2 n_yellow">WooordHunt будет полезен тем, кто: 
+<ul>
+ <li>&ensp;- сталкивается с английским языком на работе и учёбе;</li>
+ <li>&ensp;- <i>хочет повысить эффективность</i> пополнения английского словарного запаса;</li>
+ <!-- <li>&ensp;- <i>любит читать книги</i> с параллельным переводом.</li> -->
+ </ul>
+</div>
+
+
+	<!-- Yandex.RTB R-A-217631-12 -->
+	<div id="yandex_rtb_R-A-217631-12" style="margin: 25px 0px 25px 0px;"></div>
+	<script>
+	window.yaContextCb.push(()=>{
+		Ya.Context.AdvManager.render({
+			"blockId": "R-A-217631-12",
+			"renderTo": "yandex_rtb_R-A-217631-12",
+			"darkTheme": false		})
+	})
+	</script>
+
+
+
+
+<h2 style="margin-left: 12px"><a href="dic/content/en_ru" style="font: inherit; color: inherit;">Англо-русский словарь</a></h2>
+<p class="left_border" style="border: none;">
+Удобный поиск поможет вам получить доступ более чем к <i>125 000 словам</i> англо-русского словаря, который продолжает пополняться.
+К подавляющему большинству слов вы можете посмотреть варианты перевода, <i>примеры использования</i>, словосочетания, транскрипцию, а также прослушать <i>американское и британское произношение</i> слова.</p>
+
+<h2 style="margin-left: 12px"><a href="dic/content/ru_en" style="font: inherit; color: inherit;">Русско-английский словарь</a></h2>
+<p class="left_border" style="border: none;">
+Словарь содержит около <i>120 000</i> слов.  
+Варианты перевода слов на английский язык отсортированы в порядке частоты их использования для данного значения.
+	Многие варианты перевода содержат примеры использования в виде словосочетаний.
+</p>
+
+<h2 style="margin-left: 12px"><a href="dic/content/ru_en_b" style="font: inherit; color: inherit;">Русско-английский словарь 2.0</a></h2>
+<p class="left_border" style="border: none;">
+	Словарь содержит около <i>22 000</i> наиболее употребляемых слов.  
+
+	Для каждого слова, к каждому варианту перевода добавлено объяснение и примеры, которые помогают понять, в каком контексте его следует применять.
+</p>
+
+<h2 style="margin-left: 12px"><a href="editor/fx" style="font: inherit; color: inherit;">WooordHunt-редактор</a></h2>
+<p class="left_border" style="border: none;">
+	WooordHunt-редактор призван помочь тем, кто учится писать на английском языке. Он позволяет быстро посмотреть значение
+	нужного английского слова, узнать формы английских слов, перевести текст с помощью автоматического переводчика.
+</p>
+
+<h2 style="margin-left: 12px"><a href="edu/start" style="font: inherit; color: inherit;">Упражнения для запоминания английских слов</a></h2>
+
+<p class="left_border" style="border: none;">
+	В основе упражнений для изучения слов лежат интервальные повторения и активное использование примеров 
+	употребления изучаемого слова. Что в совокупности позволяет <i>довольно эффективно учить</i> новые слова.
+	Сам процесс изучения построен таким образом, что даже достаточно длительный перерыв в работе с упражнениями
+	не сильно нарушит учебный процесс.<br><br>
+
+	Используемый в упражнениях метод интервальных повторений позволяет с уверенностью сказать, 
+	что изучаемые <i>слова вы запомните надолго</i>. Также благодаря этому методу вам не нужно 
+	будет думать о том, насколько хорошо вы выучили слово на данный момент, система построена так, что трудным для вас 
+	словам вы будете уделять больше внимания. Какие-то слова вы будете запоминать хорошо сразу,
+	какие-то будут даваться вам труднее, но и те и другие вы в итоге <i>запомните очень хорошо</i>, просто на некоторые 
+	слова вам нужно будет потратить немного больше времени. Больше информации вы можете получить в разделе "<a href="/edu/start">Упражнения</a>".
+</p>
+
+
+
+<br/>
+</div></div> <div id="menu_box_mobile"> <a href="/">Главная</a>&ensp; <a href="/user/preentry">Личный кабинет</a>&ensp; <a href="/edu/start">Упражнения</a>&ensp; <b onclick="openPrjDialog('change_font_dialog_pc');" style="color:#4caf50; cursor: pointer;">Оформление</b> </div> <div id="footer"> <table> <tr> <td> <a href="/page/view/help" id="spravka_link">Справка</a>&ensp; <a href="/page/view/pp_ru">Политика конфиденциальности</a>&ensp; <a href="/page/view/feedback" id="feedback_link">Oтзывы, предложения, вопросы</a><br/> WooordHunt &mdash; ваш помощник в мире английского языка </td> <td> <div id="share"> <div class="ya-share2" data-services="vkontakte,odnoklassniki,twitter,telegram,moimir,reddit,viber,whatsapp" data-limit="6" data-copy="last" data-title="WooordHunt (Вордхант) — ваш помощник в мире английского языка" data-description="" data-popup-direction="top" data-size="m"></div> </div> </td> </tr> </table> </div> </div> <div id="column_right"> <div style="margin:0px; max-width:340px;">
+	<div id="Qvant_sidebar"></div>
+</div>
+ <!--{ADV_RIGHT_BLOCK}--> <a href="#" id="toTop">&#8226;</a> </div> </div> <div id="gap_for_mobile_history"></div> <div id="word_history_box_mobile"></div> <!-- <div id="hunted_word_box" class="mfp-hide"></div> --> <script src="https://yastatic.net/share2/share.js" async></script> <script> if ('serviceWorker' in navigator) { window.addEventListener('load', () => { navigator.serviceWorker.register('/service-worker.js') .then((reg) => {}); }); } </script> <script type="text/javascript" src="https://wooordhunt.ru/js/jquery/jquery-3.7.1.min.js"></script>
+<script type="text/javascript" src="https://wooordhunt.ru/js/magnific-popup/jquery.magnific-popup.min.js"></script>
+<script type="text/javascript" src="/js/fn_common_1.js?v=16102025"></script>
+<script type="text/javascript" src="/js/fn_edu_common_1.js?v=16102025"></script>
+<script type="text/javascript" src="/js/fn_pc_1.js?v=16102025"></script>
+<script type="text/javascript" src="/js/fn_dic_1.js?v=16102025"></script>
+<script type="text/javascript" src="/js/fn_pdic_1.js?v=16102025"></script>
+<script type="text/javascript" src="/js/jquery.cookie.js"></script>
+</body> </html> 
