@@ -1,7 +1,0 @@
-NULL в условиях равен false, !NULL == true
-
-NULL == false == 0;
-!NULL == true != 1;
-
-if (!ptr)   //ptr == NULL
-if (ptr)    //ptr != NULL
