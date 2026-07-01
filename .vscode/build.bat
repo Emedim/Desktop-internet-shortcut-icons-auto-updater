@@ -4,7 +4,7 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 set "VCPKG=C:\non-system programs\vcpkg\installed\x64-windows"
 cl src\main.c ^
    "src\cleanup interface.c"^
-   "src\ini parser.c"^
+   "src\small parser.c"^
    /I"%VCPKG%\include"^
    /utf-8^
    /Zi ^

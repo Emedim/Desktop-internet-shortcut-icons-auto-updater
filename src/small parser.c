@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <windows.h>
+#include "small parser.h"
 
 #define LF '\n'
 #define CR '\r'
@@ -15,13 +16,6 @@ bool CompareSymbols(byte symbol1, byte symbol2)
 {
     return ToLower(symbol1) == ToLower(symbol2);
 }
-
-typedef struct
-{
-    const byte *text;
-    const size_t textLength;
-    size_t seek;
-} BufferContext;
 
 //не закончился ли буффер
 #define BUFFER_NOT_FINISHED(ctx) ((ctx)->seek < (ctx)->textLength)
@@ -73,7 +67,7 @@ static size_t SkipCurrentLine(BufferContext *bfctx)
     return ++steps;
 }
 
-static bool CompareBufferToSubstring(BufferContext *bfctx, const byte interrupter, const byte *subString, const bool doSkipSpaces)
+static bool CompareBufferToSubstring(BufferContext *bfctx, const byte endOfSubstringInBfctx, const byte *subString, const bool doSkipSpaces)
 {
     bool sameSoFar = true;
     size_t substringIndex = 0;
@@ -83,7 +77,7 @@ static bool CompareBufferToSubstring(BufferContext *bfctx, const byte interrupte
         if (BUFFER_FINISHED(bfctx)) return false;
         if
         (
-            BUFFER_CURRENT_SYMBOL(bfctx) == interrupter &&
+            BUFFER_CURRENT_SYMBOL(bfctx) == endOfSubstringInBfctx &&
             subString[substringIndex] == '\0'
         )   tempRun = false;
         else tempRun = sameSoFar = CompareSymbols(BUFFER_CURRENT_SYMBOL(bfctx), subString[substringIndex++]);
@@ -93,7 +87,7 @@ static bool CompareBufferToSubstring(BufferContext *bfctx, const byte interrupte
     return sameSoFar;
 }
 
-byte *ParceFileText(const byte *text, size_t textLength)
+byte *ParceIniText(const byte *text, size_t textLength)
 {
     BufferContext bufferCtx = { text, textLength, 0 };
     bool inTargetSection = false;

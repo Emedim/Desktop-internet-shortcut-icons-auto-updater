@@ -9,6 +9,7 @@
 #include <curl/curl.h>
 
 #include "cleanup interface.h"
+#include "small parser.h"
 #define STANDARD_ERROR (-1)
 #define MAX_CURRENT_SYSTEM_RESOURCES (7)
 #define INICIAL_BUFFER_LENGTH (12)
@@ -16,8 +17,8 @@
 
 size_t CurlWriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata);
 static void FatalError(const byte *message);
-byte *ParceFileText(const byte *text, size_t textLength);
 char *WstringTo_utf8(const wchar_t *wstr);      // возвращает либо указатель на готовую конвертированную строку, либо NULL
+void CurlGetinfoFailMessage(char *type);
 void LogWsting(const char *format, const wchar_t *wstr, const char *var);
 
 void Warp_FindClose(const void *arg);
@@ -139,7 +140,7 @@ int main(void)
     }
     PushCleanupStack(cleanupStack, Warp_Free_iconsProcessContainer, &iconsProcessContainer);
 
-    fprintf(log, "[DEBUG] Started searching and processing .url files in cycle\n");
+    fprintf(log, "[DEBUG] Started searching and processing .url files in cycle ...\n");
     do
     {
         fprintf(log, "\n|==================================================================================|\n\n");
@@ -209,7 +210,7 @@ int main(void)
         PushCleanupStack(cleanupStack, Warp_Free, &fileContent);
 
         fread(fileContent, 1, fileSize.QuadPart, file);
-        currentUnit->url = ParceFileText(fileContent, fileSize.QuadPart);
+        currentUnit->url = ParceIniText(fileContent, fileSize.QuadPart);
         if (!currentUnit->url)
         {
             fprintf(log, "[ERROR] Could parse .url content. ParceFileText() failed\n");
@@ -268,16 +269,45 @@ int main(void)
         {
             if (curlMsg->msg == CURLMSG_DONE)
             {
-                fprintf(log, "\n|==================================================================================|\n\n");
+                fprintf(log, "\n|==================================================================================|\n\n[DEBUG] Transfer finished\n[DEBUG] Exit code:               %s\n", curl_easy_strerror(curlMsg->data.result));
                 CURL *easy = curlMsg->easy_handle;  //завершенный easy
                 IconProcessUnit *ipu = NULL;
-                if 
-                (
-                    curl_easy_getinfo(easy, CURLINFO_PRIVATE, &ipu) != CURLE_OK ||
-                    !ipu
-                ) fprintf(log, "[ERROR] Could not get info from curl easy handle. curl_easy_getinfo() failed");
-                else fprintf(log, "[DEBUG] transfer finished. URL: %s", ipu->url);
-                fprintf(log, "\n                     Exit code: %s\n", curl_easy_strerror(curlMsg->data.result));
+
+                if (curl_easy_getinfo(easy, CURLINFO_PRIVATE, &ipu) == CURLE_OK)
+                    fprintf(log, "[DEBUG] Initial URL:             %s\n", ipu->url);
+                else CurlGetinfoFailMessage("CURLINFO_PRIVATE");
+
+                char *destinationURL = NULL;
+                if (curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &destinationURL) == CURLE_OK)
+                    fprintf(log, "[DEBUG] last used effective URL: %s\n", destinationURL);
+                else CurlGetinfoFailMessage("CURLINFO_EFFECTIVE_URL");
+
+                long responseCode;
+                if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &responseCode) == CURLE_OK)
+                    fprintf(log, "[DEBUG] Response code:           %ld\n", responseCode);
+                else CurlGetinfoFailMessage("CURLINFO_RESPONSE_CODE");
+
+                char *contentType = NULL;
+                if (curl_easy_getinfo(easy, CURLINFO_CONTENT_TYPE, &contentType) == CURLE_OK)
+                {
+                    if (contentType) fprintf(log, "[DEBUG] Content type:            %s\n", contentType);
+                    else fprintf(log, "[ERROR] The server did not send a valid Content-Type header or the protocol used does not support this\n");
+                }
+                else CurlGetinfoFailMessage("CURLINFO_CONTENT_TYPE");
+                fprintf(log, "\n");
+                
+                bool ableParseHTML = true;
+                if (responseCode != 200)
+                {
+                    fprintf(log, "[ERROR] Response code is not 200\n");
+                    ableParseHTML = false;
+                }
+                BufferContext bfctx = {contentType, strlen(contentType), 0};
+
+                if (ableParseHTML)
+                {
+                    
+                }
             }
         }
     }
@@ -330,6 +360,11 @@ void LogWsting(const char *format, const wchar_t *wstr, const char *var)
     else fprintf(log, "[ERROR] Could not convert (wchar_t *)%s to utf-8. WstringTo_utf8() failed\n", var);
 }
 
+void CurlGetinfoFailMessage(char *type) 
+{ 
+    fprintf(log, "[ERROR] Could not get info from curl easy handle. curl_easy_getinfo(%s) failed\n", type);
+}
+
 static void FatalError(const byte *message)
 {
     if(log)
@@ -338,7 +373,7 @@ static void FatalError(const byte *message)
         MessageBoxA(NULL, "The program terminated due to a fatal error. See the log file for details.", NULL, MB_OK);
     } 
     else MessageBoxA(NULL, message, NULL, MB_OK);
-    if (cleanupStack) CompleteDeallocation(cleanupStack);   //если cleanupStack не NULL
+    if (cleanupStack) CompleteDeallocation(cleanupStack);
 }
 
 
@@ -364,18 +399,12 @@ void Warp_Free_iconsProcessContainer(const void *arg)
     while (realTypeArg->occupedUnits > 0)
     {
         IconProcessUnit *temp = realTypeArg->array[--realTypeArg->occupedUnits];
-        if (temp->url)
+        free(temp->url);
+        if (temp->download) fclose(temp->download);
+        if(temp->easy)
         {
-            free(temp->url);
-            if (temp->download)
-            {
-                fclose(temp->download);
-                if(temp->easy)
-                {
-                    curl_multi_remove_handle(realTypeArg->multi, temp->easy);
-                    curl_easy_cleanup(temp->easy);
-                }
-            }
+            curl_multi_remove_handle(realTypeArg->multi, temp->easy);
+            curl_easy_cleanup(temp->easy);
         }
         free(temp);
     }
