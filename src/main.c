@@ -32,8 +32,9 @@ void Warp_curl_global_cleanup(const void *arg);
 typedef struct
 {
     byte *url;
+    wchar_t *responcePath;
     CURL *easy;
-    FILE *download;
+    FILE *responce;
 } IconProcessUnit;
 
 typedef struct
@@ -140,6 +141,7 @@ int main(void)
     }
     PushCleanupStack(cleanupStack, Warp_Free_iconsProcessContainer, &iconsProcessContainer);
 
+    size_t DesktopFilesProcessedCorrectly = 0;
     fprintf(log, "[DEBUG] Started searching and processing .url files in cycle ...\n");
     do
     {
@@ -165,7 +167,8 @@ int main(void)
         }
         currentUnit->easy = NULL;
         currentUnit->url = NULL;
-        currentUnit->download = NULL;
+        currentUnit->responce = NULL;
+        currentUnit->responcePath = NULL;
 
         LARGE_INTEGER fileSize;
         fileSize.LowPart = fileData.nFileSizeLow;
@@ -180,17 +183,17 @@ int main(void)
         }
         LogWsting("[DEBUG] absolute path: \"%s\"\n", absoluteFilePath, "absoluteFilePath");
 
-        wchar_t absoluteDownloadFilePath[MAX_PATH];
+        currentUnit->responcePath = malloc(MAX_PATH * sizeof(wchar_t));
         if
         (
-            FAILED(StringCchPrintfW(absoluteDownloadFilePath, MAX_PATH, L"%ls\\debug\\download\\%ls", cwd, fileData.cFileName)) ||
-            PathCchRenameExtension(absoluteDownloadFilePath, MAX_PATH, L"txt") != S_OK
+            FAILED(StringCchPrintfW(currentUnit->responcePath, MAX_PATH, L"%ls\\debug\\download\\%ls", cwd, fileData.cFileName)) ||
+            PathCchRenameExtension(currentUnit->responcePath, MAX_PATH, L"txt") != S_OK
         )
         {
             FatalError("Could not get absolute path to one of debug\\download\\* file. StringCchPrintfW() or PathCchRenameExtension() failed");
             return STANDARD_ERROR;
         }
-        LogWsting("[DEBUG] debug file to process url path: \"%s\"\n", absoluteDownloadFilePath, "absoluteDownloadFilePath");
+        LogWsting("[DEBUG] debug file to process url path: \"%s\"\n", currentUnit->responcePath, "currentUnit->responcePath");
 
         //скопировать ini–текст из ярлыков
         FILE *file = _wfopen(absoluteFilePath, L"rb");
@@ -219,7 +222,7 @@ int main(void)
         }
         fprintf(log, "[DEBUG] Got url: %s\n", currentUnit->url);
 
-        if (!(currentUnit->download = _wfopen(absoluteDownloadFilePath, L"wb")))
+        if (!(currentUnit->responce = _wfopen(currentUnit->responcePath, L"wb")))
         {
             fprintf(log, "[ERROR] Could not open debug file to process url. _wfopen() failed\n");
             PartialDeallocation(cleanupStack, 2);
@@ -240,6 +243,7 @@ int main(void)
         curl_easy_setopt(currentUnit->easy, CURLOPT_FOLLOWLOCATION, 1L);                //Редиректы
         curl_multi_add_handle(iconsProcessContainer.multi, currentUnit->easy);
         
+        ++DesktopFilesProcessedCorrectly;
         PartialDeallocation(cleanupStack, 2);
         fprintf(log, "[DEBUG] Successfuly processed\n");
     }
@@ -250,10 +254,10 @@ int main(void)
         return STANDARD_ERROR;
     }
     fprintf(log, "\n|==================================================================================|\n\n[DEBUG] End of cycle\n");
-    fprintf(log, "[INFO] Processed files: %zd\n", iconsProcessContainer.occupedUnits);
-
     fprintf(log, "[DEBUG] Started transfers cycle ...\n");
+    
     int runningHandles; //склько запросов ещё НЕ завершились
+    size_t successfulResponses = 0;
     do
     {
         if(curl_multi_perform(iconsProcessContainer.multi, &runningHandles) != CURLM_OK)
@@ -303,9 +307,19 @@ int main(void)
                     ableParseHTML = false;
                 }
                 BufferContext bfctx = {contentType, strlen(contentType), 0};
+                char *targetType = "text/html";
+                if (strncmp(contentType, targetType, strlen(targetType)))
+                {
+                    fprintf(log, "[ERROR] Response content type was not recognized as \"%s\"\n", targetType);
+                    ableParseHTML = false;
+                }
 
                 if (ableParseHTML)
                 {
+                    ++successfulResponses;
+                    fclose(ipu->responce);
+                    ipu->responce = _wfopen(ipu->responcePath, "rb");
+
                     
                 }
             }
@@ -313,6 +327,9 @@ int main(void)
     }
     while (runningHandles);
     fprintf(log, "\n|==================================================================================|\n\n[DEBUG] transfers cycle finished\n");
+    fprintf(log, "[INFO] Processed files: %zd\n", iconsProcessContainer.occupedUnits);
+    fprintf(log, "[INFO] Processed files correctly: %zd\n", DesktopFilesProcessedCorrectly);
+    fprintf(log, "[INFO] Successful esponses: %zd\n", successfulResponses);
     
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
     CompleteDeallocation(cleanupStack);
@@ -329,10 +346,8 @@ size_t CurlWriteCallback
     void *userdata  //пользовательские данные. Задаётся через curl_easy_setopt(easy, CURLOPT_WRITEDATA, somePtr). Я здесь получаю IconProcessUnit *
 )
 {
-    IconProcessUnit *unit = (IconProcessUnit *)userdata;
-    size_t receivedBytes = size * nmemb;
-    fwrite(ptr, 1, receivedBytes, unit->download);  
-    return receivedBytes;    //функция должна возвращать количество обработаных байтов
+    fwrite(ptr, 1, size * nmemb, ((IconProcessUnit *)userdata)->responce);
+    return size * nmemb;    //функция должна возвращать количество обработаных байтов
 }
 
 char *WstringTo_utf8(const wchar_t *wstr)
@@ -400,7 +415,8 @@ void Warp_Free_iconsProcessContainer(const void *arg)
     {
         IconProcessUnit *temp = realTypeArg->array[--realTypeArg->occupedUnits];
         free(temp->url);
-        if (temp->download) fclose(temp->download);
+        free(temp->responcePath);
+        if (temp->responce) fclose(temp->responce);
         if(temp->easy)
         {
             curl_multi_remove_handle(realTypeArg->multi, temp->easy);
