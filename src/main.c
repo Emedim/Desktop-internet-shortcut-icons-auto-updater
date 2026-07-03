@@ -32,9 +32,9 @@ void Warp_curl_global_cleanup(const void *arg);
 typedef struct
 {
     byte *url;
-    wchar_t *responcePath;
+    wchar_t *responceFilePath;
     CURL *easy;
-    FILE *responce;
+    FILE *responceFile;
 } IconProcessUnit;
 
 typedef struct
@@ -167,53 +167,41 @@ int main(void)
         }
         currentUnit->easy = NULL;
         currentUnit->url = NULL;
-        currentUnit->responce = NULL;
-        currentUnit->responcePath = NULL;
+        currentUnit->responceFile = NULL;
+        currentUnit->responceFilePath = NULL;
 
         LARGE_INTEGER fileSize;
         fileSize.LowPart = fileData.nFileSizeLow;
         fileSize.HighPart = fileData.nFileSizeHigh; // fileSize.QuadPart – размер фала
 
         //получить абсолютный путь до ярлыка
-        wchar_t absoluteFilePath[MAX_PATH];
-        if (FAILED(StringCchPrintfW(absoluteFilePath, MAX_PATH, L"%ls\\%ls", desktopPath, fileData.cFileName)))
+        wchar_t CerrentDesktopFileAbsolutePath[MAX_PATH];
+        if (FAILED(StringCchPrintfW(CerrentDesktopFileAbsolutePath, MAX_PATH, L"%ls\\%ls", desktopPath, fileData.cFileName)))
         {
             FatalError("Could not get absolute path to one of .url file. StringCchPrintfW() failed");
             return STANDARD_ERROR;
         }
-        LogWsting("[DEBUG] absolute path: \"%s\"\n", absoluteFilePath, "absoluteFilePath");
-
-        currentUnit->responcePath = malloc(MAX_PATH * sizeof(wchar_t));
-        if
-        (
-            FAILED(StringCchPrintfW(currentUnit->responcePath, MAX_PATH, L"%ls\\debug\\download\\%ls", cwd, fileData.cFileName)) ||
-            PathCchRenameExtension(currentUnit->responcePath, MAX_PATH, L"txt") != S_OK
-        )
-        {
-            FatalError("Could not get absolute path to one of debug\\download\\* file. StringCchPrintfW() or PathCchRenameExtension() failed");
-            return STANDARD_ERROR;
-        }
-        LogWsting("[DEBUG] debug file to process url path: \"%s\"\n", currentUnit->responcePath, "currentUnit->responcePath");
+        LogWsting("[DEBUG] absolute path: \"%s\"\n", CerrentDesktopFileAbsolutePath, "CerrentDesktopFileAbsolutePath");
 
         //скопировать ini–текст из ярлыков
-        FILE *file = _wfopen(absoluteFilePath, L"rb");
-        if (!file)
+        FILE *currentDesktopFile = _wfopen(CerrentDesktopFileAbsolutePath, L"rb");
+        if (!currentDesktopFile)
         {
             fprintf(log, "[ERROR] Could not open .url file for reading. _wfopen() failed.\n");
             continue;
         }
-        PushCleanupStack(cleanupStack, Warp_FClose, &file);
-        byte *fileContent = malloc(fileSize.QuadPart);
-        if(!fileContent)
+        PushCleanupStack(cleanupStack, Warp_FClose, &currentDesktopFile);
+        byte *content = malloc(fileSize.QuadPart);
+        if(!content)
         {
             fprintf(log, "[ERROR] Could not allocate memory for output buffer. malloc() failed\n");
             SingleDeallocation(cleanupStack);
             continue;
         }
-        PushCleanupStack(cleanupStack, Warp_Free, &fileContent);
+        PushCleanupStack(cleanupStack, Warp_Free, &content);
+        fread(content, 1, fileSize.QuadPart, currentDesktopFile);
 
-        fread(fileContent, 1, fileSize.QuadPart, file);
-        currentUnit->url = ParceIniText(fileContent, fileSize.QuadPart);
+        currentUnit->url = ParceIniText(content, fileSize.QuadPart);
         if (!currentUnit->url)
         {
             fprintf(log, "[ERROR] Could parse .url content. ParceFileText() failed\n");
@@ -222,7 +210,20 @@ int main(void)
         }
         fprintf(log, "[DEBUG] Got url: %s\n", currentUnit->url);
 
-        if (!(currentUnit->responce = _wfopen(currentUnit->responcePath, L"wb")))
+        currentUnit->responceFilePath = malloc(MAX_PATH * sizeof(wchar_t));
+        if
+        (
+            FAILED(StringCchPrintfW(currentUnit->responceFilePath, MAX_PATH, L"%ls\\debug\\download\\%ls", cwd, fileData.cFileName)) ||
+            PathCchRenameExtension(currentUnit->responceFilePath, MAX_PATH, L"txt") != S_OK
+        )
+        {
+            fprintf(log, "[ERROR] Could not get absolute path to one of debug\\download\\* file. StringCchPrintfW() or PathCchRenameExtension() failed");
+            PartialDeallocation(cleanupStack, 2);
+            continue;
+        }
+        LogWsting("[DEBUG] Responce file path: \"%s\"\n", currentUnit->responceFilePath, "currentUnit->responceFilePath");
+
+        if (!(currentUnit->responceFile = _wfopen(currentUnit->responceFilePath, L"wb")))
         {
             fprintf(log, "[ERROR] Could not open debug file to process url. _wfopen() failed\n");
             PartialDeallocation(cleanupStack, 2);
@@ -317,10 +318,30 @@ int main(void)
                 if (ableParseHTML)
                 {
                     ++successfulResponses;
-                    fclose(ipu->responce);
-                    ipu->responce = _wfopen(ipu->responcePath, "rb");
+                    fclose(ipu->responceFile);
+                    ipu->responceFile = _wfopen(ipu->responceFilePath, L"rb");
+                    if (!ipu->responceFile)
+                    {
+                        fprintf(log, "[ERROR] could not open responce file. _wfopen() failed");
+                        continue;
+                    }
 
-                    
+                    WIN32_FILE_ATTRIBUTE_DATA responceFileData;
+                    if (!GetFileAttributesExW(ipu->responceFilePath, GetFileExInfoStandard, &responceFileData))
+                    {
+                        fprintf(log, "[ERROR] could not get size of responce file. GetFileAttributesExW() failed");
+                        continue;
+                    }
+                    ULARGE_INTEGER responceFileSize;
+                    responceFileSize.LowPart = responceFileData.nFileSizeLow;
+                    responceFileSize.HighPart = responceFileData.nFileSizeHigh;
+                    char *buffer = malloc(responceFileSize.QuadPart);
+
+                    fread(buffer, 1, responceFileSize.QuadPart, ipu->responceFile);
+
+
+
+                    free(buffer);
                 }
             }
         }
@@ -346,8 +367,8 @@ size_t CurlWriteCallback
     void *userdata  //пользовательские данные. Задаётся через curl_easy_setopt(easy, CURLOPT_WRITEDATA, somePtr). Я здесь получаю IconProcessUnit *
 )
 {
-    fwrite(ptr, 1, size * nmemb, ((IconProcessUnit *)userdata)->responce);
-    return size * nmemb;    //функция должна возвращать количество обработаных байтов
+    fwrite(ptr, 1, size *= nmemb, ((IconProcessUnit *)userdata)->responceFile);
+    return size;    //функция должна возвращать количество обработаных байтов
 }
 
 char *WstringTo_utf8(const wchar_t *wstr)
@@ -415,8 +436,8 @@ void Warp_Free_iconsProcessContainer(const void *arg)
     {
         IconProcessUnit *temp = realTypeArg->array[--realTypeArg->occupedUnits];
         free(temp->url);
-        free(temp->responcePath);
-        if (temp->responce) fclose(temp->responce);
+        free(temp->responceFilePath);
+        if (temp->responceFile) fclose(temp->responceFile);
         if(temp->easy)
         {
             curl_multi_remove_handle(realTypeArg->multi, temp->easy);
