@@ -6,7 +6,11 @@
 #include <strsafe.h>    //StringCchCatW(); StringCchCopyW();
 #include <pathcch.h>    //PathCchRemoveFileSpec
 
-#include <curl/curl.h>
+#include "curl/curl.h"
+
+#include "libxml/HTMLparser.h"
+#include "libxml/xpath.h"
+#include "libxml/uri.h"
 
 #include "cleanup interface.h"
 #include "small parser.h"
@@ -27,6 +31,7 @@ void Warp_Free(const void *arg);
 void Warp_Free_iconsProcessContainer(const void *arg);
 void Warp_FClose(const void *arg);
 void Warp_curl_global_cleanup(const void *arg);
+char *GetFaviconUrl(const char *buffer, size_t size, const char *base_url);
 
 
 typedef struct
@@ -214,7 +219,7 @@ int main(void)
         if
         (
             FAILED(StringCchPrintfW(currentUnit->responceFilePath, MAX_PATH, L"%ls\\debug\\download\\%ls", cwd, fileData.cFileName)) ||
-            PathCchRenameExtension(currentUnit->responceFilePath, MAX_PATH, L"txt") != S_OK
+            PathCchRenameExtension(currentUnit->responceFilePath, MAX_PATH, L"html") != S_OK
         )
         {
             fprintf(log, "[ERROR] Could not get absolute path to one of debug\\download\\* file. StringCchPrintfW() or PathCchRenameExtension() failed");
@@ -296,7 +301,11 @@ int main(void)
                 if (curl_easy_getinfo(easy, CURLINFO_CONTENT_TYPE, &contentType) == CURLE_OK)
                 {
                     if (contentType) fprintf(log, "[DEBUG] Content type:            %s\n", contentType);
-                    else fprintf(log, "[ERROR] The server did not send a valid Content-Type header or the protocol used does not support this\n");
+                    else
+                    {
+                        fprintf(log, "[ERROR] The server did not send a valid Content-Type header or the protocol used does not support this\n");
+                        continue;
+                    }
                 }
                 else CurlGetinfoFailMessage("CURLINFO_CONTENT_TYPE");
                 fprintf(log, "\n");
@@ -318,6 +327,7 @@ int main(void)
                 if (ableParseHTML)
                 {
                     ++successfulResponses;
+
                     fclose(ipu->responceFile);
                     ipu->responceFile = _wfopen(ipu->responceFilePath, L"rb");
                     if (!ipu->responceFile)
@@ -325,30 +335,41 @@ int main(void)
                         fprintf(log, "[ERROR] could not open responce file. _wfopen() failed");
                         continue;
                     }
-
                     WIN32_FILE_ATTRIBUTE_DATA responceFileData;
                     if (!GetFileAttributesExW(ipu->responceFilePath, GetFileExInfoStandard, &responceFileData))
                     {
                         fprintf(log, "[ERROR] could not get size of responce file. GetFileAttributesExW() failed");
                         continue;
                     }
-                    ULARGE_INTEGER responceFileSize;
-                    responceFileSize.LowPart = responceFileData.nFileSizeLow;
-                    responceFileSize.HighPart = responceFileData.nFileSizeHigh;
+                    ULARGE_INTEGER responceFileSize = { .LowPart = responceFileData.nFileSizeLow, .HighPart = responceFileData.nFileSizeHigh };
                     char *buffer = malloc(responceFileSize.QuadPart);
+                    if (!buffer)
+                    {
+                        fprintf(log, "[ERROR] malloc() failed\n");
+                        continue;
+                    }
+                    PushCleanupStack(cleanupStack, Warp_Free, &buffer);
 
                     fread(buffer, 1, responceFileSize.QuadPart, ipu->responceFile);
+                    char *faviconUrl = GetFaviconUrl(buffer, responceFileSize.QuadPart, destinationURL);
+                    if(!faviconUrl)
+                    {
+                        fprintf(log, "[ERROR] Could not get url to favicon. GetFaviconUrl() failed.\n");
+                        SingleDeallocation(cleanupStack);
+                        continue;
+                    }
+                    PushCleanupStack(cleanupStack, Warp_Free, &faviconUrl);
 
+                    fprintf(log, "[DEBUG] Favicon url: %s\n", faviconUrl);
 
-
-                    free(buffer);
+                    PartialDeallocation(cleanupStack, 2);
                 }
             }
         }
     }
     while (runningHandles);
     fprintf(log, "\n|==================================================================================|\n\n[DEBUG] transfers cycle finished\n");
-    fprintf(log, "[INFO] Processed files: %zd\n", iconsProcessContainer.occupedUnits);
+    fprintf(log, "[INFO] Found files: %zd\n", iconsProcessContainer.occupedUnits);
     fprintf(log, "[INFO] Processed files correctly: %zd\n", DesktopFilesProcessedCorrectly);
     fprintf(log, "[INFO] Successful esponses: %zd\n", successfulResponses);
     
@@ -457,4 +478,71 @@ void Warp_FClose(const void *arg)
 void Warp_curl_global_cleanup(const void *arg)
 {
     curl_global_cleanup();
+}
+
+
+
+char *GetFaviconUrl(const char *buffer, size_t size, const char *base_url)
+{
+    xmlDocPtr doc = htmlReadMemory(
+        buffer,
+        size,
+        NULL,
+        NULL,
+        HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING
+    );
+    if (!doc) return NULL;
+
+    xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
+    if (!ctx)
+    {
+        xmlFreeDoc(doc);
+        return NULL;
+    }
+    // shortcut icon в приоритете
+    xmlXPathObjectPtr result = xmlXPathEvalExpression
+    (
+        (xmlChar*)"//link[contains(translate(@rel,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'shortcut') and contains(translate(@rel,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'icon')]/@href",
+        ctx
+    );
+
+    xmlChar *href = NULL;
+    if (result && result->nodesetval && result->nodesetval->nodeNr > 0)
+        href = xmlNodeGetContent(result->nodesetval->nodeTab[0]);
+    // fallback: просто icon (если shortcut icon нет)
+    if (!href)
+    {
+        xmlXPathFreeObject(result);
+        result = xmlXPathEvalExpression
+        (
+            (xmlChar*)"//link[contains(translate(@rel,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'icon')]/@href",
+            ctx
+        );
+        if (result && result->nodesetval && result->nodesetval->nodeNr > 0)
+            href = xmlNodeGetContent(result->nodesetval->nodeTab[0]);
+    }
+
+    char *final_url = NULL;
+    if (href)
+    {
+        // если ссылка абсолютная
+        if (strstr((char *)href, "http://") || strstr((char *)href, "https://"))
+            final_url = strdup((char *)href);
+        else
+        {
+            // относительная → делаем абсолютную
+            xmlChar *abs = xmlBuildURI(href, (xmlChar *)base_url);
+            if (abs)
+            {
+                final_url = strdup((char *)abs);
+                xmlFree(abs);
+            }
+        }
+        xmlFree(href);
+    }
+
+    xmlXPathFreeObject(result);
+    xmlXPathFreeContext(ctx);
+    xmlFreeDoc(doc);
+    return final_url;
 }
