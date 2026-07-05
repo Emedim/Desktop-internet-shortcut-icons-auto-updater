@@ -1,0 +1,16 @@
+{
+    "version": 4,
+    "configurations": [
+        {
+            "name": "Win64",
+            "compilerPath": "cl.exe",
+            "intelliSenseMode": "windows-msvc-x64",
+            "cStandard": "c17",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "C:/non-system_programs/vcpkg/installed/x64-windows/include",
+                "C:/non-system_programs/vcpkg/installed/x64-windows/include/libxml2"
+            ]
+        }
+    ]
+}
