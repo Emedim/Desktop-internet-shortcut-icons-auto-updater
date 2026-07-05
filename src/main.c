@@ -19,11 +19,12 @@
 #define INICIAL_BUFFER_LENGTH (12)
 #define BUFFER_ADDITION (8)
 
-size_t CurlWriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata);
+size_t WriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata);
 static void FatalError(const byte *message);
 char *WstringTo_utf8(const wchar_t *wstr);      // возвращает либо указатель на готовую конвертированную строку, либо NULL
 void CurlGetinfoFailMessage(char *type);
 void LogWsting(const char *format, const wchar_t *wstr, const char *var);
+char *GetFaviconUrl(const char *buffer, size_t size, const char *base_url);
 
 void Warp_FindClose(const void *arg);
 void Warp_CoTaskMemFree(const void *arg);
@@ -31,15 +32,16 @@ void Warp_Free(const void *arg);
 void Warp_Free_iconsProcessContainer(const void *arg);
 void Warp_FClose(const void *arg);
 void Warp_curl_global_cleanup(const void *arg);
-char *GetFaviconUrl(const char *buffer, size_t size, const char *base_url);
 
 
 typedef struct
 {
     byte *url;
-    wchar_t *responceFilePath;
+    wchar_t *htmlResponceFilePath;
+    wchar_t *faviconResponceFilePath;
     CURL *easy;
     FILE *responceFile;
+    bool transferingHTML;
 } IconProcessUnit;
 
 typedef struct
@@ -173,7 +175,9 @@ int main(void)
         currentUnit->easy = NULL;
         currentUnit->url = NULL;
         currentUnit->responceFile = NULL;
-        currentUnit->responceFilePath = NULL;
+        currentUnit->htmlResponceFilePath = NULL;
+        currentUnit->faviconResponceFilePath = NULL;
+        currentUnit->transferingHTML = true;
 
         LARGE_INTEGER fileSize;
         fileSize.LowPart = fileData.nFileSizeLow;
@@ -215,20 +219,33 @@ int main(void)
         }
         fprintf(log, "[DEBUG] Got url: %s\n", currentUnit->url);
 
-        currentUnit->responceFilePath = malloc(MAX_PATH * sizeof(wchar_t));
+        currentUnit->htmlResponceFilePath = malloc(MAX_PATH * sizeof(wchar_t));
         if
         (
-            FAILED(StringCchPrintfW(currentUnit->responceFilePath, MAX_PATH, L"%ls\\debug\\download\\%ls", cwd, fileData.cFileName)) ||
-            PathCchRenameExtension(currentUnit->responceFilePath, MAX_PATH, L"html") != S_OK
+            FAILED(StringCchPrintfW(currentUnit->htmlResponceFilePath, MAX_PATH, L"%ls\\debug\\responce\\%ls", cwd, fileData.cFileName)) ||
+            PathCchRenameExtension(currentUnit->htmlResponceFilePath, MAX_PATH, L"html") != S_OK
         )
         {
-            fprintf(log, "[ERROR] Could not get absolute path to one of debug\\download\\* file. StringCchPrintfW() or PathCchRenameExtension() failed");
+            fprintf(log, "[ERROR] Could not get absolute path to one of debug\\responce\\* file. StringCchPrintfW() or PathCchRenameExtension() failed");
             PartialDeallocation(cleanupStack, 2);
             continue;
         }
-        LogWsting("[DEBUG] Responce file path: \"%s\"\n", currentUnit->responceFilePath, "currentUnit->responceFilePath");
+        LogWsting("[DEBUG] HTML responce file path: \"%s\"\n", currentUnit->htmlResponceFilePath, "currentUnit->htmlResponceFilePath");
 
-        if (!(currentUnit->responceFile = _wfopen(currentUnit->responceFilePath, L"wb")))
+        currentUnit->faviconResponceFilePath = malloc(MAX_PATH * sizeof(wchar_t));
+        if
+        (
+            FAILED(StringCchPrintfW(currentUnit->faviconResponceFilePath, MAX_PATH, L"%ls\\debug\\icons\\%ls", cwd, fileData.cFileName)) ||
+            PathCchRenameExtension(currentUnit->faviconResponceFilePath, MAX_PATH, L"html") != S_OK
+        )
+        {
+            fprintf(log, "[ERROR] Could not get absolute path to one of debug\\icons\\* file. StringCchPrintfW() or PathCchRenameExtension() failed");
+            PartialDeallocation(cleanupStack, 2);
+            continue;
+        }
+        LogWsting("[DEBUG] Favicon responce file path: \"%s\"\n", currentUnit->faviconResponceFilePath, "currentUnit->htmlResponceFilePath");
+
+        if (!(currentUnit->responceFile = _wfopen(currentUnit->htmlResponceFilePath, L"wb")))
         {
             fprintf(log, "[ERROR] Could not open debug file to process url. _wfopen() failed\n");
             PartialDeallocation(cleanupStack, 2);
@@ -242,8 +259,8 @@ int main(void)
             continue;
         }
         curl_easy_setopt(currentUnit->easy, CURLOPT_URL, currentUnit->url);             //url по которому обращаться
-        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEFUNCTION, CurlWriteCallback);  //колбек когда приходят данные
-        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, currentUnit);            //параметр, с которым вызывается колбек
+        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEFUNCTION, WriteCallback);      //колбек когда приходят данные
+        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, &currentUnit->responceFile);            //параметр, с которым вызывается колбек
         curl_easy_setopt(currentUnit->easy, CURLOPT_PRIVATE, currentUnit);              //ассоциация easy с IconProcessUnit
         curl_easy_setopt(currentUnit->easy, CURLOPT_TIMEOUT, 15L);                      //Запрос длиться не более 15 секунд
         curl_easy_setopt(currentUnit->easy, CURLOPT_FOLLOWLOCATION, 1L);                //Редиректы
@@ -261,9 +278,9 @@ int main(void)
     }
     fprintf(log, "\n|==================================================================================|\n\n[DEBUG] End of cycle\n");
     fprintf(log, "[DEBUG] Started transfers cycle ...\n");
-    
+
     int runningHandles; //склько запросов ещё НЕ завершились
-    size_t successfulResponses = 0;
+    size_t successfulHtmlResponses = 0, successfulFaviconResponses = 0;
     do
     {
         if(curl_multi_perform(iconsProcessContainer.multi, &runningHandles) != CURLM_OK)
@@ -279,90 +296,113 @@ int main(void)
         {
             if (curlMsg->msg == CURLMSG_DONE)
             {
-                fprintf(log, "\n|==================================================================================|\n\n[DEBUG] Transfer finished\n[DEBUG] Exit code:               %s\n", curl_easy_strerror(curlMsg->data.result));
                 CURL *easy = curlMsg->easy_handle;  //завершенный easy
                 IconProcessUnit *ipu = NULL;
+                if (curl_easy_getinfo(easy, CURLINFO_PRIVATE, &ipu) != CURLE_OK)
+                {
+                    CurlGetinfoFailMessage("CURLINFO_PRIVATE");
+                    continue;
+                }
+                if (ipu->transferingHTML)
+                {
+                    ipu->transferingHTML = false;
+                    fprintf(log, "\n|==================================================================================|\n\n[DEBUG] Transfer finished\n[DEBUG] Exit code:               %s\n", curl_easy_strerror(curlMsg->data.result));
 
-                if (curl_easy_getinfo(easy, CURLINFO_PRIVATE, &ipu) == CURLE_OK)
                     fprintf(log, "[DEBUG] Initial URL:             %s\n", ipu->url);
-                else CurlGetinfoFailMessage("CURLINFO_PRIVATE");
+                    char *destinationURL = NULL;
+                    if (curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &destinationURL) == CURLE_OK)
+                        fprintf(log, "[DEBUG] last used effective URL: %s\n", destinationURL);
+                    else CurlGetinfoFailMessage("CURLINFO_EFFECTIVE_URL");
 
-                char *destinationURL = NULL;
-                if (curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &destinationURL) == CURLE_OK)
-                    fprintf(log, "[DEBUG] last used effective URL: %s\n", destinationURL);
-                else CurlGetinfoFailMessage("CURLINFO_EFFECTIVE_URL");
+                    long responseCode;
+                    if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &responseCode) == CURLE_OK)
+                        fprintf(log, "[DEBUG] Response code:           %ld\n", responseCode);
+                    else CurlGetinfoFailMessage("CURLINFO_RESPONSE_CODE");
 
-                long responseCode;
-                if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &responseCode) == CURLE_OK)
-                    fprintf(log, "[DEBUG] Response code:           %ld\n", responseCode);
-                else CurlGetinfoFailMessage("CURLINFO_RESPONSE_CODE");
-
-                char *contentType = NULL;
-                if (curl_easy_getinfo(easy, CURLINFO_CONTENT_TYPE, &contentType) == CURLE_OK)
-                {
-                    if (contentType) fprintf(log, "[DEBUG] Content type:            %s\n", contentType);
-                    else
+                    char *contentType = NULL;
+                    if (curl_easy_getinfo(easy, CURLINFO_CONTENT_TYPE, &contentType) == CURLE_OK)
                     {
-                        fprintf(log, "[ERROR] The server did not send a valid Content-Type header or the protocol used does not support this\n");
-                        continue;
+                        if (contentType) fprintf(log, "[DEBUG] Content type:            %s\n", contentType);
+                        else
+                        {
+                            fprintf(log, "[ERROR] The server did not send a valid Content-Type header or the protocol used does not support this\n");
+                            continue;
+                        }
+                    }
+                    else CurlGetinfoFailMessage("CURLINFO_CONTENT_TYPE");
+                    fprintf(log, "\n");
+                    
+                    bool ableParseHTML = true;
+                    if (responseCode != 200)
+                    {
+                        fprintf(log, "[ERROR] Response code is not 200\n");
+                        ableParseHTML = false;
+                    }
+                    BufferContext bfctx = {contentType, strlen(contentType), 0};
+                    char *targetType = "text/html";
+                    if (strncmp(contentType, targetType, strlen(targetType)))
+                    {
+                        fprintf(log, "[ERROR] Response content type was not recognized as \"%s\"\n", targetType);
+                        ableParseHTML = false;
+                    }
+
+                    if (ableParseHTML)
+                    {
+                        ++successfulHtmlResponses;
+
+                        fclose(ipu->responceFile);
+                        ipu->responceFile = _wfopen(ipu->htmlResponceFilePath, L"rb");
+                        if (!ipu->responceFile)
+                        {
+                            fprintf(log, "[ERROR] could not open responce file. _wfopen() failed");
+                            continue;
+                        }
+                        WIN32_FILE_ATTRIBUTE_DATA responceFileData;
+                        if (!GetFileAttributesExW(ipu->htmlResponceFilePath, GetFileExInfoStandard, &responceFileData))
+                        {
+                            fprintf(log, "[ERROR] could not get size of responce file. GetFileAttributesExW() failed");
+                            continue;
+                        }
+                        ULARGE_INTEGER responceFileSize = { .LowPart = responceFileData.nFileSizeLow, .HighPart = responceFileData.nFileSizeHigh };
+                        char *buffer = malloc(responceFileSize.QuadPart);
+                        if (!buffer)
+                        {
+                            fprintf(log, "[ERROR] malloc() failed\n");
+                            continue;
+                        }
+                        PushCleanupStack(cleanupStack, Warp_Free, &buffer);
+
+                        fread(buffer, 1, responceFileSize.QuadPart, ipu->responceFile);
+                        char *faviconUrl = GetFaviconUrl(buffer, responceFileSize.QuadPart, destinationURL);
+                        if(!faviconUrl)
+                        {
+                            fprintf(log, "[ERROR] Could not get url to favicon. GetFaviconUrl() failed.\n");
+                            SingleDeallocation(cleanupStack);
+                            continue;
+                        }
+                        PushCleanupStack(cleanupStack, Warp_Free, &faviconUrl);
+                        fprintf(log, "[DEBUG] Favicon url: %s\n", faviconUrl);
+                        curl_multi_remove_handle(iconsProcessContainer.multi, easy);
+                        fclose(ipu->responceFile);
+
+                        curl_easy_setopt(easy, CURLOPT_URL, faviconUrl); // перенастраиваем
+                        curl_easy_setopt(easy, CURLOPT_TIMEOUT, 8L);
+                        if (ipu->responceFile = _wfopen(ipu->faviconResponceFilePath, L"wb"))
+                        {
+                            PartialDeallocation(cleanupStack, 2);
+                            fprintf(log, "[ERROR] Could not open file for favicon responce\n");
+                            continue;
+                        }
+
+                        fprintf(log, "[DEBUG] Successfuly configured curl easy handle to download favicon\n");
+                        curl_multi_add_handle(iconsProcessContainer.multi, easy);
+                        PartialDeallocation(cleanupStack, 2);
                     }
                 }
-                else CurlGetinfoFailMessage("CURLINFO_CONTENT_TYPE");
-                fprintf(log, "\n");
-                
-                bool ableParseHTML = true;
-                if (responseCode != 200)
+                else
                 {
-                    fprintf(log, "[ERROR] Response code is not 200\n");
-                    ableParseHTML = false;
-                }
-                BufferContext bfctx = {contentType, strlen(contentType), 0};
-                char *targetType = "text/html";
-                if (strncmp(contentType, targetType, strlen(targetType)))
-                {
-                    fprintf(log, "[ERROR] Response content type was not recognized as \"%s\"\n", targetType);
-                    ableParseHTML = false;
-                }
-
-                if (ableParseHTML)
-                {
-                    ++successfulResponses;
-
-                    fclose(ipu->responceFile);
-                    ipu->responceFile = _wfopen(ipu->responceFilePath, L"rb");
-                    if (!ipu->responceFile)
-                    {
-                        fprintf(log, "[ERROR] could not open responce file. _wfopen() failed");
-                        continue;
-                    }
-                    WIN32_FILE_ATTRIBUTE_DATA responceFileData;
-                    if (!GetFileAttributesExW(ipu->responceFilePath, GetFileExInfoStandard, &responceFileData))
-                    {
-                        fprintf(log, "[ERROR] could not get size of responce file. GetFileAttributesExW() failed");
-                        continue;
-                    }
-                    ULARGE_INTEGER responceFileSize = { .LowPart = responceFileData.nFileSizeLow, .HighPart = responceFileData.nFileSizeHigh };
-                    char *buffer = malloc(responceFileSize.QuadPart);
-                    if (!buffer)
-                    {
-                        fprintf(log, "[ERROR] malloc() failed\n");
-                        continue;
-                    }
-                    PushCleanupStack(cleanupStack, Warp_Free, &buffer);
-
-                    fread(buffer, 1, responceFileSize.QuadPart, ipu->responceFile);
-                    char *faviconUrl = GetFaviconUrl(buffer, responceFileSize.QuadPart, destinationURL);
-                    if(!faviconUrl)
-                    {
-                        fprintf(log, "[ERROR] Could not get url to favicon. GetFaviconUrl() failed.\n");
-                        SingleDeallocation(cleanupStack);
-                        continue;
-                    }
-                    PushCleanupStack(cleanupStack, Warp_Free, &faviconUrl);
-
-                    fprintf(log, "[DEBUG] Favicon url: %s\n", faviconUrl);
-
-                    PartialDeallocation(cleanupStack, 2);
+                    ++successfulFaviconResponses;
+                    //favicon
                 }
             }
         }
@@ -371,7 +411,8 @@ int main(void)
     fprintf(log, "\n|==================================================================================|\n\n[DEBUG] transfers cycle finished\n");
     fprintf(log, "[INFO] Found files: %zd\n", iconsProcessContainer.occupedUnits);
     fprintf(log, "[INFO] Processed files correctly: %zd\n", DesktopFilesProcessedCorrectly);
-    fprintf(log, "[INFO] Successful esponses: %zd\n", successfulResponses);
+    fprintf(log, "[INFO] Successful HTML responses: %zd\n", successfulHtmlResponses);
+    fprintf(log, "[INFO] Successful favicon responses: %zd\n", successfulHtmlResponses);
     
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
     CompleteDeallocation(cleanupStack);
@@ -380,7 +421,7 @@ int main(void)
 
 
 
-size_t CurlWriteCallback
+size_t WriteCallback
 (
     char *ptr,      //указатель на пришедшие данные
     size_t size,    //size * nmemb = количество пришедших байт
@@ -388,7 +429,7 @@ size_t CurlWriteCallback
     void *userdata  //пользовательские данные. Задаётся через curl_easy_setopt(easy, CURLOPT_WRITEDATA, somePtr). Я здесь получаю IconProcessUnit *
 )
 {
-    fwrite(ptr, 1, size *= nmemb, ((IconProcessUnit *)userdata)->responceFile);
+    fwrite(ptr, 1, size *= nmemb, *(FILE **)userdata);
     return size;    //функция должна возвращать количество обработаных байтов
 }
 
@@ -457,7 +498,8 @@ void Warp_Free_iconsProcessContainer(const void *arg)
     {
         IconProcessUnit *temp = realTypeArg->array[--realTypeArg->occupedUnits];
         free(temp->url);
-        free(temp->responceFilePath);
+        free(temp->htmlResponceFilePath);
+        free(temp->faviconResponceFilePath);
         if (temp->responceFile) fclose(temp->responceFile);
         if(temp->easy)
         {
