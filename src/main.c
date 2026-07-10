@@ -19,13 +19,13 @@
 #define INICIAL_BUFFER_LENGTH (12)
 #define BUFFER_ADDITION (8)
 
+
 size_t WriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata);
 static void FatalError(const byte *message);
-char *WstringTo_utf8(const wchar_t *wstr);      // возвращает либо указатель на готовую конвертированную строку, либо NULL
+char *WstringToUtf8(const wchar_t *wstr);      // возвращает либо указатель на готовую конвертированную строку, либо NULL
 void CurlGetinfoFailMessage(char *type);
-void LogWsting(const char *format, const wchar_t *wstr, const char *var);
+void LogWstring(const char *format, const wchar_t *wstr, const char *var);
 char *GetFaviconUrl(const char *buffer, size_t size, const char *base_url);
-bool BuildResponcePath(wchar_t *resultPath, const wchar_t *cwd, const wchar_t *endFolder);
 bool DropDirectory(const wchar_t *directory, const wchar_t *extention);
 
 void Warp_FindClose(const void *arg);
@@ -36,10 +36,26 @@ void Warp_FClose(const void *arg);
 void Warp_curl_global_cleanup(const void *arg);
 
 
+#define FOLDER_PAGES "pages"
+#define FOLDER_PAGES_L L"pages"
+#define FOLDER_FAVICONS "favicons"
+#define FOLDER_FAVICONS_L L"favicons"
+#define EXTENTION_OF_FILES_PAGES_L L"html"
+#define EXTENTION_OF_FILES_FAVICONS_L L"html"
+
+typedef struct 
+{
+    wchar_t *path;
+    const wchar_t *folderName;
+    const wchar_t *extentionOfFiles;
+} PathForResponceFoldersInfo;
+
+
+
 typedef struct
 {
     byte *url;
-    wchar_t *htmlResponceFilePath;
+    wchar_t *pageResponceFilePath;
     wchar_t *faviconResponceFilePath;
     CURL *easy;
     FILE *responceFile;
@@ -89,19 +105,67 @@ int main(void)
         FatalError("could not open .log file");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Warp_FClose, &log);
+    PushCleanupStack(cleanupStack, Warp_FClose, &log);      // (1 глобально)
 
-    LogWsting("[DEBUG] Current app folder (CWD with no \\bin): \"%s\"\n", cwd, "cwd");
-    LogWsting("[DEBUG] app.log Path: \"%s\"\n", logPath, "logPath");
+    LogWstring("[DEBUG] Current app folder (CWD with no \\bin): \"%s\"\n", cwd, "cwd");
+    LogWstring("[DEBUG] app.log Path: \"%s\"\n", logPath, "logPath");
 
-    wchar_t responcePathHtml[MAX_PATH], responcePathFavicon[MAX_PATH];
-    if (BuildResponcePath(responcePathHtml, cwd, L"html") || BuildResponcePath(responcePathFavicon, cwd, L"icons")) return STANDARD_ERROR;
 
-    if(DropDirectory(responcePathHtml, L"html")) LogWsting("[DEBUG] Directory cleaned: \"%s\"\n", responcePathHtml, "responcePathHtml");
-    else LogWsting("[ERROR] Error of cleaning directory: \"%s\" . Redundant files may remain. DropDirectory() failed\n", responcePathHtml, "responcePathHtml");
 
-    if(DropDirectory(responcePathFavicon, L"html")) LogWsting("[DEBUG] Directory cleaned: \"%s\"\n", responcePathFavicon, "responcePathFavicon");
-    else LogWsting("[ERROR] Error of cleaning directory: \"%s\" . Redundant files may remain. DropDirectory() failed\n", responcePathFavicon, "responcePathFavicon");
+
+
+    wchar_t responcePathPages[MAX_PATH], responcePathFavicons[MAX_PATH];
+    PathForResponceFoldersInfo pages = { responcePathPages, FOLDER_PAGES_L, EXTENTION_OF_FILES_PAGES_L};
+    PathForResponceFoldersInfo favicons = { responcePathFavicons, FOLDER_FAVICONS_L, EXTENTION_OF_FILES_FAVICONS_L};
+    if (FAILED(StringCchPrintfW(pages.path, MAX_PATH, L"%ls\\responce\\%ls\\", cwd, pages.folderName)))
+    {
+        char *folderNameUtf8 = WstringToUtf8(pages.folderName);
+        if (!folderNameUtf8) FatalError("Could not make utf8 string from wide-char to build error message. WstringToUtf8() failed");
+        PushCleanupStack(cleanupStack, Warp_Free, &folderNameUtf8); // (1 глобально +1 контекст FatalError ->2)
+        int len = snprintf(NULL, 0, "Could not build \"%s\" path for responces", folderNameUtf8);
+        char *errorMessage = malloc((size_t)len + 1);
+        if (!errorMessage) FatalError("Could not allocate heap for error message to get built. malloc() failed");
+        PushCleanupStack(cleanupStack, Warp_Free, &errorMessage);   // (1 глобально +2 контекст FatalError ->3)
+        snprintf(errorMessage, (size_t)len + 1, "Could not build \"%s\" path for responces", folderNameUtf8);
+        FatalError(errorMessage);  // (3->0)
+        return STANDARD_ERROR;
+    }
+    else
+    {
+        LogWstring("[DEBUG] Build path for responce files \"" FOLDER_PAGES "\": \"%s\"\n", responcePathPages, "responcePathPages");
+        if (DropDirectory(responcePathPages, L"html")) 
+            fprintf(log, "[DEBUG] Directory cleaned up.\n");
+        else fprintf(log, "[ERROR] Failed to clean up directory. Some files may remain\n");
+    }
+
+    if (FAILED(StringCchPrintfW(favicons.path, MAX_PATH, L"%ls\\responce\\%ls\\", cwd, favicons.folderName)))
+    {
+        char *folderNameUtf8 = WstringToUtf8(favicons.folderName);
+        if (!folderNameUtf8) FatalError("Could not make utf8 string from wide-char to build error message. WstringToUtf8() failed");
+        PushCleanupStack(cleanupStack, Warp_Free, &folderNameUtf8); // (1 глобально +1 контекст FatalError ->2)
+        int len = snprintf(NULL, 0, "Could not build \"%s\" path for responces", folderNameUtf8);
+        char *errorMessage = malloc((size_t)len + 1);
+        if (!errorMessage) FatalError("Could not allocate heap for error message to get built. malloc() failed");
+        PushCleanupStack(cleanupStack, Warp_Free, &errorMessage);   // (1 глобально +2 контекст FatalError ->3)
+        snprintf(errorMessage, (size_t)len + 1, "Could not build \"%s\" path for responces", folderNameUtf8);
+        FatalError(errorMessage);  // (3->0)
+        return STANDARD_ERROR;
+    }
+    else
+    {
+        LogWstring("[DEBUG] Build path for responce files \"" FOLDER_FAVICONS "\": \"%s\"\n", responcePathFavicons, "responcePathFavicons");
+        if (DropDirectory(responcePathFavicons, L"html")) 
+            fprintf(log, "[DEBUG] Directory cleaned up.\n");
+        else fprintf(log, "[ERROR] Failed to clean up directory. Some files may remain\n");
+    }
+
+
+
+
+
+
+    CompleteDeallocation(cleanupStack);
+    return 0;
 
     wchar_t *desktopPath = NULL;
     HRESULT desktopPathResult = SHGetKnownFolderPath // взять путь до определённой папки
@@ -111,13 +175,13 @@ int main(void)
         NULL,
         &desktopPath
     );
-    PushCleanupStack(cleanupStack, Warp_CoTaskMemFree, &desktopPath);   //desktopPath освобождать даже в случае неудачи
+    PushCleanupStack(cleanupStack, Warp_CoTaskMemFree, &desktopPath);   //desktopPath освобождать даже в случае неудачи (2 глобально)
     if (FAILED(desktopPathResult)) 
     {
         FatalError("Could not find path to desktop. SHGetKnownFolderPath() failed");
         return STANDARD_ERROR;
     }
-    LogWsting("[DEBUG] Desktop path: \"%s\"\n", desktopPath, "desktopPath");
+    LogWstring("[DEBUG] Desktop path: \"%s\"\n", desktopPath, "desktopPath");
     
     wchar_t searchPath[MAX_PATH];   //Получение токена поиска для FindFirstFileW() из рабочего стола
     if
@@ -137,14 +201,14 @@ int main(void)
         FatalError("Invalid files searching descriptor value. FindFirstFileW() failed");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Warp_FindClose, &searchingFilesHandle);
+    PushCleanupStack(cleanupStack, Warp_FindClose, &searchingFilesHandle);  // (3 глобально)
 
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
     {
         FatalError("curl_global_init() failed");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, &Warp_curl_global_cleanup, NULL);
+    PushCleanupStack(cleanupStack, &Warp_curl_global_cleanup, NULL);        // (4 глобально)
     IconsProcessContainer iconsProcessContainer = {NULL, curl_multi_init(), 0, INICIAL_BUFFER_LENGTH};
     if (!iconsProcessContainer.multi)
     {
@@ -152,19 +216,19 @@ int main(void)
         return STANDARD_ERROR;
     }
     iconsProcessContainer.array = malloc(iconsProcessContainer.capacity * sizeof(IconProcessUnit *));
-    if(!iconsProcessContainer.array)
+    if (!iconsProcessContainer.array)
     {
         FatalError("malloc() failed. Var: iconsProcessContainer.array");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Warp_Free_iconsProcessContainer, &iconsProcessContainer);
+    PushCleanupStack(cleanupStack, Warp_Free_iconsProcessContainer, &iconsProcessContainer);    // (5 глобально)
 
     size_t DesktopFilesProcessedCorrectly = 0;
     fprintf(log, "[DEBUG] Started searching and processing .url files in cycle ...\n");
     do
     {
         fprintf(log, "\n|==================================================================================|\n\n");
-        LogWsting("[DEBUG] file name: \"%s\"\n", fileData.cFileName, "fileData.cFileName");
+        LogWstring("[DEBUG] file name: \"%s\"\n", fileData.cFileName, "fileData.cFileName");
         //создать буффер для хранения информации о ярлыках
         if (iconsProcessContainer.occupedUnits >= iconsProcessContainer.capacity)
         {
@@ -185,29 +249,29 @@ int main(void)
         }
         *currentUnit = (IconProcessUnit){ .transferingHTML = true };
 
-        currentUnit->htmlResponceFilePath = malloc(MAX_PATH * sizeof(wchar_t));
+        currentUnit->pageResponceFilePath = malloc(MAX_PATH * sizeof(wchar_t));
         if
         (
-            FAILED(StringCchPrintfW(currentUnit->htmlResponceFilePath, MAX_PATH, L"%ls%ls", responcePathHtml, fileData.cFileName)) ||
-            PathCchRenameExtension(currentUnit->htmlResponceFilePath, MAX_PATH, L"html") != S_OK
+            FAILED(StringCchPrintfW(currentUnit->pageResponceFilePath, MAX_PATH, L"%ls%ls", responcePathPages, fileData.cFileName)) ||
+            PathCchRenameExtension(currentUnit->pageResponceFilePath, MAX_PATH, L"html") != S_OK
         )
         {
             fprintf(log, "[ERROR] Could not get absolute path to one of debug\\responce\\* file. StringCchPrintfW() or PathCchRenameExtension() failed");
             continue;
         }
-        LogWsting("[DEBUG] HTML responce file path: \"%s\"\n", currentUnit->htmlResponceFilePath, "currentUnit->htmlResponceFilePath");
+        LogWstring("[DEBUG] Page responce file path: \"%s\"\n", currentUnit->pageResponceFilePath, "currentUnit->pageResponceFilePath");
 
         currentUnit->faviconResponceFilePath = malloc(MAX_PATH * sizeof(wchar_t));
         if
         (
-            FAILED(StringCchPrintfW(currentUnit->faviconResponceFilePath, MAX_PATH, L"%ls%ls", responcePathFavicon, fileData.cFileName)) ||
+            FAILED(StringCchPrintfW(currentUnit->faviconResponceFilePath, MAX_PATH, L"%ls%ls", responcePathFavicons, fileData.cFileName)) ||
             PathCchRenameExtension(currentUnit->faviconResponceFilePath, MAX_PATH, L"html") != S_OK
         )
         {
             fprintf(log, "[ERROR] Could not get absolute path to one of debug\\icons\\* file. StringCchPrintfW() or PathCchRenameExtension() failed");
             continue;
         }
-        LogWsting("[DEBUG] Favicon responce file path: \"%s\"\n", currentUnit->faviconResponceFilePath, "currentUnit->faviconResponceFilePath");
+        LogWstring("[DEBUG] Favicon responce file path: \"%s\"\n", currentUnit->faviconResponceFilePath, "currentUnit->faviconResponceFilePath");
 
         //получить абсолютный путь до ярлыка
         wchar_t CerrentDesktopFileAbsolutePath[MAX_PATH];
@@ -216,7 +280,7 @@ int main(void)
             FatalError("Could not get absolute path to one of .url file. StringCchPrintfW() failed");
             return STANDARD_ERROR;
         }
-        LogWsting("[DEBUG] absolute path: \"%s\"\n", CerrentDesktopFileAbsolutePath, "CerrentDesktopFileAbsolutePath");
+        LogWstring("[DEBUG] absolute path: \"%s\"\n", CerrentDesktopFileAbsolutePath, "CerrentDesktopFileAbsolutePath");
 
         //скопировать ini–текст из ярлыков
         LARGE_INTEGER fileSize = (LARGE_INTEGER){.LowPart = fileData.nFileSizeLow, .HighPart = fileData.nFileSizeHigh};
@@ -226,37 +290,37 @@ int main(void)
             fprintf(log, "[ERROR] Could not allocate memory for output buffer. malloc() failed\n");
             continue;
         }
-        PushCleanupStack(cleanupStack, Warp_Free, &content);
+        PushCleanupStack(cleanupStack, Warp_Free, &content);        // (5 глобально +1 временно ->6)
         FILE *currentDesktopFile = _wfopen(CerrentDesktopFileAbsolutePath, L"rb");  //файл откуда копировать
         if (!currentDesktopFile)
         {
             fprintf(log, "[ERROR] Could not open .url file for reading. _wfopen() failed.\n");
-            SingleDeallocation(cleanupStack);
+            SingleDeallocation(cleanupStack);   //(6->5)
             continue;
         }
-        PushCleanupStack(cleanupStack, Warp_FClose, &currentDesktopFile);
+        PushCleanupStack(cleanupStack, Warp_FClose, &currentDesktopFile);   // (5 глобально +2 временно ->7)
         fread(content, 1, fileSize.QuadPart, currentDesktopFile);
 
         currentUnit->url = ParceIniText(content, fileSize.QuadPart);   
         if (!currentUnit->url)
         {
             fprintf(log, "[ERROR] Could parse .url content. ParceFileText() failed\n");
-            PartialDeallocation(cleanupStack, 2);
+            PartialDeallocation(cleanupStack, 2);   //(7->5)
             continue;
         }
         fprintf(log, "[DEBUG] Got url: %s\n", currentUnit->url);
 
-        if (!(currentUnit->responceFile = _wfopen(currentUnit->htmlResponceFilePath, L"wb")))
+        if (!(currentUnit->responceFile = _wfopen(currentUnit->pageResponceFilePath, L"wb")))
         {
             fprintf(log, "[ERROR] Could not open debug file to process url. _wfopen() failed\n");
-            PartialDeallocation(cleanupStack, 2);
+            PartialDeallocation(cleanupStack, 2);   //(7->5)
             continue;
         }
         
         if (!(currentUnit->easy = curl_easy_init()))
         {
             fprintf(log, "[ERROR] Could not initialize libcurl easy handle to transfer data by url. curl_easy_init() failed\n");
-            PartialDeallocation(cleanupStack, 2);
+            PartialDeallocation(cleanupStack, 2);   //(7->5)
             continue;
         }
         curl_easy_setopt(currentUnit->easy, CURLOPT_URL, currentUnit->url);                 //url по которому обращаться
@@ -268,7 +332,7 @@ int main(void)
         curl_multi_add_handle(iconsProcessContainer.multi, currentUnit->easy);
         
         ++DesktopFilesProcessedCorrectly;
-        PartialDeallocation(cleanupStack, 2);
+        PartialDeallocation(cleanupStack, 2);   //(7->5)
         fprintf(log, "[DEBUG] Successfuly processed\n");
     }
     while (FindNextFileW(searchingFilesHandle, &fileData));
@@ -352,13 +416,13 @@ int main(void)
                         ++successfulHtmlResponses;
 
                         fclose(ipu->responceFile);
-                        if (!(ipu->responceFile = _wfopen(ipu->htmlResponceFilePath, L"rb")))
+                        if (!(ipu->responceFile = _wfopen(ipu->pageResponceFilePath, L"rb")))
                         {
                             fprintf(log, "[ERROR] could not open responce file. _wfopen() failed");
                             continue;
                         }
                         WIN32_FILE_ATTRIBUTE_DATA responceFileData;
-                        if (!GetFileAttributesExW(ipu->htmlResponceFilePath, GetFileExInfoStandard, &responceFileData))
+                        if (!GetFileAttributesExW(ipu->pageResponceFilePath, GetFileExInfoStandard, &responceFileData))
                         {
                             fprintf(log, "[ERROR] could not get size of responce file. GetFileAttributesExW() failed");
                             continue;
@@ -433,7 +497,7 @@ size_t WriteCallback
     return size;    //функция должна возвращать количество обработаных байтов
 }
 
-char *WstringTo_utf8(const wchar_t *wstr)
+char *WstringToUtf8(const wchar_t *wstr)
 {
     int size = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
     if (!size) return NULL; 
@@ -447,7 +511,7 @@ char *WstringTo_utf8(const wchar_t *wstr)
     return utf8;
 }
 
-void LogWsting(const char *format, const wchar_t *wstr, const char *var)
+void LogWstring(const char *format, const wchar_t *wstr, const char *var)
 {
     char* tempMessage_utf8 = WstringTo_utf8(wstr);
     if (tempMessage_utf8)
@@ -461,35 +525,6 @@ void LogWsting(const char *format, const wchar_t *wstr, const char *var)
 void CurlGetinfoFailMessage(char *type) 
 { 
     fprintf(log, "[ERROR] Could not get info from curl easy handle. curl_easy_getinfo(%s) failed\n", type);
-}
-
-bool BuildResponcePath(wchar_t *resultPath, const wchar_t *cwd, const wchar_t *endFolder)
-{
-    char *endFolderUTF8 = WstringTo_utf8(endFolder);
-    bool returnValue = false;
-    if (FAILED(StringCchPrintfW(resultPath, MAX_PATH, L"%ls\\responce\\%ls\\", cwd, endFolder)))
-    {
-        char *errorMessage = NULL;
-        char *format = "Could not build path to \"%s\" responce folder. BuildResponcePath() failed";
-        int length = snprintf(NULL, 0, format, endFolderUTF8);
-        if (endFolderUTF8 && length >= 0)
-        {
-            errorMessage = malloc(length + 1); // +1 для '\0'
-            if (errorMessage) snprintf(errorMessage, length + 1, format, endFolderUTF8);
-        }
-        FatalError(errorMessage);
-        free(errorMessage);
-        returnValue = true;
-    }
-    else
-    {
-        char *resultPathUTF8 = WstringTo_utf8(resultPath);
-        if (endFolderUTF8 && resultPathUTF8) fprintf(log, "[DEBUG] \"%s\" responce folder: \"%s\"\n", endFolderUTF8, resultPathUTF8);
-        else fprintf(log, "[DEBUG] BuildResponcePath() sccessfuly returned\n[ERROR] Could not print built path");
-        free(resultPathUTF8);
-    }
-    free(endFolderUTF8);
-    return returnValue;
 }
 
 bool DropDirectory(const wchar_t *directory, const wchar_t *extention)
@@ -518,7 +553,7 @@ bool DropDirectory(const wchar_t *directory, const wchar_t *extention)
 
 static void FatalError(const byte *message)
 {
-    char nullMessage[] = "Could not build message about error";
+    char nullMessage[] = "Could not build error message";
     if(log)
     {
         fprintf(log, "[FATAL ERROR] %s\n", message ? message : nullMessage);
@@ -552,7 +587,7 @@ void Warp_Free_iconsProcessContainer(const void *arg)
     {
         IconProcessUnit *temp = realTypeArg->array[--realTypeArg->occupedUnits];
         free(temp->url);
-        free(temp->htmlResponceFilePath);
+        free(temp->pageResponceFilePath);
         free(temp->faviconResponceFilePath);
         if (temp->responceFile) fclose(temp->responceFile);
         if(temp->easy)
