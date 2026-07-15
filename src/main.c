@@ -43,7 +43,7 @@ typedef struct
 
 typedef struct
 {
-    byte *url;
+    char *url;
     CURL *easy;
     FILE *responseFile;
     wchar_t pageResponseFilePath[MAX_PATH];
@@ -69,7 +69,7 @@ typedef struct
 
 
 size_t WriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata);
-static void FatalError(const byte *message);
+static void FatalError(const char *message);
 char *WstringToUtf8(const wchar_t *wstr);      // возвращает либо указатель на готовую конвертированную строку, либо NULL
 void CurlGetinfoFailMessage(StreamInfo *streamInfo, const char *type);
 void LogWstring(const char *format, const wchar_t *wstr, const char *var);
@@ -79,17 +79,21 @@ int vMakeMessage(char **buffer, const char *format, va_list ap);
 int MakeMessage(char **buffer, const char *format, ...);
 bool ProcessResponseFolderInfo(ResponceFolderInfo *info);
 bool ProcessResponseFilePath(wchar_t *value, ResponceFolderInfo *pathInfo, const wchar_t *fileName, const char *variableName);
-void FlushLogBuffer(LogBuffer *logBuffer);
 int vAddLogBuffer(LogBuffer *logBuffer, const char *dataFormat, va_list ap);
 int AddLogBuffer(LogBuffer *logBuffer, const char *dataFormat, ...);
+void FlushLogBuffer(LogBuffer *logBuffer);
+int SIWrap_vAddLogBuffer(void *logBuffer, const char *format, va_list ap);
+int SIWrap_vfprintf(void *file, const char *format, va_list ap);
 int WriteStream(StreamInfo *info, const char *format, ...);
+bool WriteCurlResponseCode(CURL *easy, StreamInfo *stream, long *responseCode);
+bool WriteCurlContentType(CURL *easy, StreamInfo *stream, char **contentType);
 
-void Warp_FindClose(const void *arg);
-void Warp_CoTaskMemFree(const void *arg);
-void Warp_Free(const void *arg);
+void Wrap_FindClose(const void *arg);
+void Wrap_CoTaskMemFree(const void *arg);
+void Wrap_Free(const void *arg);
 void IconsProcessContainerDestructor(const void *arg);
-void Warp_FClose(const void *arg);
-void Warp_curl_global_cleanup(const void *arg);
+void Wrap_FClose(const void *arg);
+void Wrap_curl_global_cleanup(const void *arg);
 void ResponseFolderInfoDestructor(const void *arg);
 
 
@@ -127,7 +131,7 @@ int main(void)
         FatalError("Could not open .log file");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Warp_FClose, &log);      // (1 глобально)
+    PushCleanupStack(cleanupStack, Wrap_FClose, &log);      // (1 глобально)
 
     LogWstring("[DEBUG] Current app folder (CWD with no \\bin): \"%s\"\n", appFolder, "cwd");
     LogWstring("[DEBUG] app.log Path: \"%s\"\n", logPath, "logPath");
@@ -149,7 +153,7 @@ int main(void)
         NULL,
         &desktopPath
     );
-    PushCleanupStack(cleanupStack, Warp_CoTaskMemFree, &desktopPath);   //desktopPath освобождать даже в случае неудачи (4 глобально)
+    PushCleanupStack(cleanupStack, Wrap_CoTaskMemFree, &desktopPath);   //desktopPath освобождать даже в случае неудачи (4 глобально)
     if (FAILED(desktopPathResult)) 
     {
         FatalError("Could not find path to desktop. SHGetKnownFolderPath() failed");
@@ -184,14 +188,14 @@ int main(void)
             return STANDARD_ERROR;
         }
     }
-    PushCleanupStack(cleanupStack, Warp_FindClose, &searchingFilesHandle);  // (5 глобально)
+    PushCleanupStack(cleanupStack, Wrap_FindClose, &searchingFilesHandle);  // (5 глобально)
 
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
     {
         FatalError("curl_global_init() failed");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Warp_curl_global_cleanup, NULL);        // (6 глобально)
+    PushCleanupStack(cleanupStack, Wrap_curl_global_cleanup, NULL);        // (6 глобально)
     IconsProcessContainer iconsProcessContainer = {NULL, curl_multi_init(), 0, INICIAL_BUFFER_LENGTH};
     if (!iconsProcessContainer.multi)
     {
@@ -246,13 +250,13 @@ int main(void)
 
         //скопировать ini–текст из ярлыков
         LARGE_INTEGER fileSize = (LARGE_INTEGER){.LowPart = fileData.nFileSizeLow, .HighPart = fileData.nFileSizeHigh};
-        byte *content = malloc(fileSize.QuadPart);  //создать буффер для копирования
+        char *content = malloc(fileSize.QuadPart);  //создать буффер для копирования
         if(!content)
         {
             fprintf(log, "[ERROR] Could not allocate memory for output buffer. malloc() failed\n");
             continue;
         }
-        PushCleanupStack(cleanupStack, Warp_Free, &content);        // (7 глобально +1 временно ->8)
+        PushCleanupStack(cleanupStack, Wrap_Free, &content);        // (7 глобально +1 временно ->8)
         FILE *currentDesktopFile = _wfopen(CurrentDesktopFileAbsolutePath, L"rb");  //файл откуда копировать
         if (!currentDesktopFile)
         {
@@ -260,7 +264,7 @@ int main(void)
             SingleDeallocation(cleanupStack);   //(8->7)
             continue;
         }
-        PushCleanupStack(cleanupStack, Warp_FClose, &currentDesktopFile);   // (7 глобально +2 временно ->9)
+        PushCleanupStack(cleanupStack, Wrap_FClose, &currentDesktopFile);   // (7 глобально +2 временно ->9)
         fread(content, 1, fileSize.QuadPart, currentDesktopFile);
 
         currentUnit->url = ParceIniText(content, fileSize.QuadPart);   
@@ -324,16 +328,20 @@ int main(void)
             if (curlMsg->msg == CURLMSG_DONE)
             {
                 CURL *easy = curlMsg->easy_handle;  //завершенный easy
+                StreamInfo fileStream = { log, SIWrap_vfprintf };
                 IconProcessUnit *ipu = NULL;
                 if (curl_easy_getinfo(easy, CURLINFO_PRIVATE, &ipu) != CURLE_OK)
                 {
-                    fprintf(log, "[ERROR] Could not get info about transfer. curl_easy_getinfo(CURLINFO_PRIVATE) failed");
+                    WriteStream(&fileStream, "[ERROR] Could not get info about transfer. curl_easy_getinfo(CURLINFO_PRIVATE) failed");
                     continue;
                 }
+
+                long responseCode;
+                char *contentType = NULL;
                 if (ipu->downloadingPage)
                 {
                     ipu->downloadingPage = false;
-                    StreamInfo logBufferStream = { &ipu->logBuffer, vAddLogBuffer };
+                    StreamInfo logBufferStream = { &ipu->logBuffer, SIWrap_vAddLogBuffer };
                     
                     WriteStream
                     (
@@ -345,32 +353,22 @@ int main(void)
                     char *lastUrl = NULL;
                     if (curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &lastUrl) != CURLE_OK)
                     {
-                        CurlGetinfoFailMessage(&logBufferStream, "CURLINFO_EFFECTIVE_URL");
+                        FlushLogBuffer(&ipu->logBuffer);
+                        CurlGetinfoFailMessage(&fileStream, "CURLINFO_EFFECTIVE_URL");
                         continue;
                     }
                     WriteStream(&logBufferStream, "[DEBUG] last used effective URL: %s\n", lastUrl);
                     
-                    long responseCode;
-                    if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &responseCode) != CURLE_OK)
+                    if (!WriteCurlResponseCode(easy, &logBufferStream, &responseCode))
                     {
-                        CurlGetinfoFailMessage(&logBufferStream, "CURLINFO_RESPONSE_CODE");
+                        FlushLogBuffer(&ipu->logBuffer);
                         continue;
-                    }
-                    WriteStream(&logBufferStream, "[DEBUG] Response code:           %ld\n", responseCode);
-
-                    char *contentType = NULL;
-                    if (curl_easy_getinfo(easy, CURLINFO_CONTENT_TYPE, &contentType) != CURLE_OK)
+                    } 
+                    if (!WriteCurlContentType(easy, &logBufferStream, &contentType))
                     {
-                        CurlGetinfoFailMessage(&logBufferStream, "CURLINFO_CONTENT_TYPE");
-                        continue;
-                    }
-                    if (!contentType)
-                    {
-                        WriteStream(&logBufferStream, "[ERROR] The server did not send a valid Content-Type header or the protocol used does not support this\n");
                         FlushLogBuffer(&ipu->logBuffer);
                         continue;
                     }
-                    WriteStream(&logBufferStream, "[DEBUG] Content type:            %s\n\n", contentType);
                     
                     bool ableParseHTML = true;
                     if (responseCode != 200)
@@ -392,44 +390,44 @@ int main(void)
                         fclose(ipu->responseFile);
                         if (!(ipu->responseFile = _wfopen(ipu->pageResponseFilePath, L"rb")))
                         {
-                            WriteStream(&logBufferStream, "[ERROR] Could not open responce file. _wfopen() failed");
                             FlushLogBuffer(&ipu->logBuffer);
+                            WriteStream(&fileStream, "[ERROR] Could not open responce file. _wfopen() failed");
                             continue;
                         }
                         WIN32_FILE_ATTRIBUTE_DATA responceFileData;
                         if (!GetFileAttributesExW(ipu->pageResponseFilePath, GetFileExInfoStandard, &responceFileData))
                         {
-                            WriteStream(&logBufferStream, "[ERROR] Could not get size of responce file. GetFileAttributesExW() failed\n");
                             FlushLogBuffer(&ipu->logBuffer);
+                            WriteStream(&fileStream, "[ERROR] Could not get size of responce file. GetFileAttributesExW() failed\n");
                             continue;
                         }
                         ULARGE_INTEGER responceFileSize = { .LowPart = responceFileData.nFileSizeLow, .HighPart = responceFileData.nFileSizeHigh };
                         char *buffer = malloc(responceFileSize.QuadPart);
                         if (!buffer)
                         {
-                            WriteStream(&logBufferStream, "[ERROR] malloc() failed\n");
                             FlushLogBuffer(&ipu->logBuffer);
+                            WriteStream(&fileStream, "[ERROR] malloc() failed\n");
                             continue;
                         }
-                        PushCleanupStack(cleanupStack, Warp_Free, &buffer);     //(7 глобально +1 временно ->8)
+                        PushCleanupStack(cleanupStack, Wrap_Free, &buffer);     //(7 глобально +1 временно ->8)
 
                         fread(buffer, 1, responceFileSize.QuadPart, ipu->responseFile);
                         char *faviconUrl = GetFaviconUrl(buffer, responceFileSize.QuadPart, lastUrl);
                         if(!faviconUrl)
                         {
-                            WriteStream(&logBufferStream, "[ERROR] Could not get favicon url. GetFaviconUrl() failed.\n");
                             FlushLogBuffer(&ipu->logBuffer);
+                            WriteStream(&fileStream, "[ERROR] Could not get favicon url. GetFaviconUrl() failed.\n");
                             SingleDeallocation(cleanupStack);   //(8->7)
                             continue;
                         }
-                        PushCleanupStack(cleanupStack, Warp_Free, &faviconUrl);     //(7 глобально +2 временно ->9)
+                        PushCleanupStack(cleanupStack, Wrap_Free, &faviconUrl);     //(7 глобально +2 временно ->9)
                         WriteStream(&logBufferStream, "[DEBUG] Favicon url: %s\n", faviconUrl);
                         
                         fclose(ipu->responseFile);
                         if (!(ipu->responseFile = _wfopen(ipu->faviconResponseFilePath, L"wb")))
                         {
-                            WriteStream(&logBufferStream, "[ERROR] Could not open file for favicon responce\n");
                             FlushLogBuffer(&ipu->logBuffer);
+                            WriteStream(&fileStream, "[ERROR] Could not open file for favicon responce\n");
                             PartialDeallocation(cleanupStack, 2);   //(9->7)
                             continue;
                         }
@@ -448,29 +446,10 @@ int main(void)
                 {
                     ++successfulFaviconResponses;
                     FlushLogBuffer(&ipu->logBuffer);
-                    StreamInfo fileStream = { log, vfprintf };
                     WriteStream(&fileStream, "\n        -------- transfering favicon --------\n\n");
 
-                    long responseCode;
-                    if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &responseCode) != CURLE_OK)
-                    {
-                        CurlGetinfoFailMessage(&fileStream, "CURLINFO_RESPONSE_CODE");
-                        continue;
-                    }
-                    WriteStream(&fileStream, "[DEBUG] Response code:           %ld\n", responseCode);
-
-                    char *contentType = NULL;
-                    if (curl_easy_getinfo(easy, CURLINFO_CONTENT_TYPE, &contentType) != CURLE_OK)
-                    {
-                        CurlGetinfoFailMessage(&fileStream, "CURLINFO_CONTENT_TYPE");
-                        continue;
-                    }
-                    if (!contentType)
-                    {
-                        WriteStream(&fileStream, "[ERROR] The server did not send a valid Content-Type header or the protocol used does not support this\n");
-                        continue;
-                    }
-                    WriteStream(&fileStream, "[DEBUG] Content type:            %s\n", contentType);
+                    if (!WriteCurlResponseCode(easy, &fileStream, &responseCode)) continue;
+                    if (!WriteCurlContentType(easy, &fileStream, &contentType)) continue;
                 }
             }
         }
@@ -668,9 +647,9 @@ int AddLogBuffer(LogBuffer *logBuffer, const char *dataFormat, ...)
 {
     va_list ap;
     va_start(ap, dataFormat);
-    int writtenBites = vAddLogBuffer(logBuffer, dataFormat, ap);
+    int writtenBytes = vAddLogBuffer(logBuffer, dataFormat, ap);
     va_end(ap);
-    return writtenBites;
+    return writtenBytes;
 }
 
 void FlushLogBuffer(LogBuffer *logBuffer)
@@ -678,16 +657,55 @@ void FlushLogBuffer(LogBuffer *logBuffer)
     fprintf(log, "\n|==================================================================================|\n\n%s", logBuffer->content);
 }
 
-int WriteStream(StreamInfo *info, const char *format, ...)
+int SIWrap_vAddLogBuffer(void *logBuffer, const char *format, va_list ap)
+{
+    return vAddLogBuffer((LogBuffer *)logBuffer, format, ap);
+}
+
+int SIWrap_vfprintf(void *file, const char *format, va_list ap)
+{
+    return vfprintf((FILE *)file, format, ap);
+}
+
+int WriteStream(StreamInfo *stream, const char *format, ...)
 {
     va_list ap;
     va_start(ap, format);
-    int writtenBites = info->func(info->stream, format, ap);
+    int writtenBytes = stream->func(stream->stream, format, ap);
     va_end(ap);
-    return writtenBites;
+    return writtenBytes;
 }
 
-static void FatalError(const byte *message)
+bool WriteCurlResponseCode(CURL *easy, StreamInfo *stream, long *responseCode)
+{
+    if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, responseCode) == CURLE_OK)
+    {
+        WriteStream(stream, "[DEBUG] Response code:           %ld\n", *responseCode);
+        return true;
+    }
+    else 
+    {
+        CurlGetinfoFailMessage(stream, "CURLINFO_RESPONSE_CODE");
+        return false;
+    }
+}
+
+bool WriteCurlContentType(CURL *easy, StreamInfo *stream, char **contentType)
+{
+    if (curl_easy_getinfo(easy, CURLINFO_CONTENT_TYPE, contentType) == CURLE_OK)
+    {
+        if (*contentType)
+        {
+            WriteStream(stream, "[DEBUG] Content type:            %s\n", *contentType);
+            return true;
+        }
+        else WriteStream(stream, "[ERROR] The server did not send a valid Content-Type header or the protocol used does not support this\n");
+    }
+    else CurlGetinfoFailMessage(stream, "CURLINFO_CONTENT_TYPE");
+    return false;
+}
+
+static void FatalError(const char *message)
 {
     char nullMessage[] = "Could not build error message";
     if(log)
@@ -700,18 +718,17 @@ static void FatalError(const byte *message)
 }
 
 
-
-void Warp_FindClose(const void *arg)
+void Wrap_FindClose(const void *arg)
 {
     FindClose(*(HANDLE *)arg);
 }
 
-void Warp_CoTaskMemFree(const void *arg)
+void Wrap_CoTaskMemFree(const void *arg)
 {
     CoTaskMemFree(*(wchar_t **)arg);
 }
 
-void Warp_Free(const void *arg)
+void Wrap_Free(const void *arg)
 {
     free(*(void **)arg);
 }
@@ -736,12 +753,12 @@ void IconsProcessContainerDestructor(const void *arg)
     free(container->array);
 }
 
-void Warp_FClose(const void *arg)
+void Wrap_FClose(const void *arg)
 {
     fclose(*(FILE **)arg);
 }
 
-void Warp_curl_global_cleanup(const void *arg)
+void Wrap_curl_global_cleanup(const void *arg)
 {
     curl_global_cleanup();
 }
