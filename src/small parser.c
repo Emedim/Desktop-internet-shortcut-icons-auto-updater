@@ -87,7 +87,7 @@ static bool CompareBufferToSubstring(BufferContext *bfctx, const byte endOfSubst
     return sameSoFar;
 }
 
-byte *ParceIniText(const byte *text, size_t textLength)
+byte *ParseIniText(const byte *text, size_t textLength)
 {
     BufferContext bufferCtx = { text, textLength, 0 };
     bool inTargetSection = false;

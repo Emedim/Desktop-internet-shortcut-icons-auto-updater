@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
-#include <strsafe.h>    //StringCchCatW(); StringCchCopyW();
+#include <strsafe.h>    //StringCchCatW(); StringCchCopyW(); StringCchPrintfW();
 #include <pathcch.h>    //PathCchRemoveFileSpec
 
 #include "curl/curl.h"
@@ -22,33 +22,116 @@
 
 #define FOLDER_PAGES_L L"pages"
 #define FOLDER_FAVICONS_L L"favicons"
-#define EXTENTION_OF_FILES_PAGES_L L"html"
-#define EXTENTION_OF_FILES_FAVICONS_L L"html"
+#define DEFAULT_EXTENTION_OF_FILES_PAGES_L L"html"
+
+
+typedef struct
+{
+    char *faviconContentType;
+    wchar_t *imageContentType;
+} ContentTypesMatchingUnit;
+
+#define CONTENT_TYPES_QUAINITY 14
+typedef struct
+{
+    ContentTypesMatchingUnit array[CONTENT_TYPES_QUAINITY];
+    size_t quantity;
+} ContentTypesMatchingContainer;
+
+const ContentTypesMatchingContainer contentTypes = 
+{
+    {
+        {
+            "image/x-icon",
+            L"ico"
+        },
+        {
+            "image/vnd.microsoft.icon",
+            L"ico"
+        },
+        {
+            "image/ico",
+            L"ico"
+        },
+        {
+            "image/icon",
+            L"ico"
+        },
+        {
+            "image/png",
+            L"png"
+        },
+        {
+            "image/svg+xml",
+            L"svg"
+        },
+        {
+            "image/gif",
+            L"gif"
+        },
+        {
+            "image/jpeg",
+            L"jpeg"
+        },
+        {
+            "image/webp",
+            L"webp"
+        },
+        {
+            "image/bmp",
+            L"bmp"
+        },
+        {
+            "image/x-bmp",
+            L"bmp"
+        },
+        {
+            "image/tiff",
+            L"tiff"
+        },
+        {
+            "image/avif",
+            L"avif"
+        },
+        {
+            "image/apng",
+            L"apng"
+        }
+    },
+    CONTENT_TYPES_QUAINITY
+};
+
 
 typedef struct 
 {
     wchar_t path[MAX_PATH];
-    const wchar_t *folderName;
-    const wchar_t *extentionOfFiles;
     char *folderNameUtf8;
-} ResponceFolderInfo;
+} ResponseFolderInfo;
 
 
 typedef struct 
 {
     char *content;
     size_t length;
-} LogBuffer;
-
+} MemoryBuffer;
 
 typedef struct
 {
+    void *stream;
+    bool (*write)(void *, const char *, size_t);
+} StreamInfo;
+
+typedef struct
+{
+    MemoryBuffer logBuffer;
+    MemoryBuffer faviconBuffer;
+    StreamInfo writeStream;     //сюда пишет curlCallback
     char *url;
     CURL *easy;
     FILE *responseFile;
     wchar_t pageResponseFilePath[MAX_PATH];
     wchar_t faviconResponseFilePath[MAX_PATH];
-    LogBuffer logBuffer;
+    wchar_t fileName[MAX_PATH];
     bool downloadingPage;
 } IconProcessUnit;
 
@@ -56,16 +139,9 @@ typedef struct
 {
     IconProcessUnit **array;
     CURLM *multi;
-    size_t occupedUnits;
+    size_t occupiedUnits;
     size_t capacity;
 } IconsProcessContainer;
-
-
-typedef struct
-{
-    void *stream;
-    int (*func)(void *, const char *, va_list);
-} StreamInfo;
 
 
 size_t WriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata);
@@ -73,20 +149,20 @@ static void FatalError(const char *message);
 char *WstringToUtf8(const wchar_t *wstr);      // возвращает либо указатель на готовую конвертированную строку, либо NULL
 void CurlGetinfoFailMessage(StreamInfo *streamInfo, const char *type);
 void LogWstring(const char *format, const wchar_t *wstr, const char *var);
-char *GetFaviconUrl(const char *buffer, size_t size, const char *base_url);
-bool DropDirectory(const wchar_t *directory, const wchar_t *extention);
+char *GetFaviconUrl(const char *buffer, int size, const char *base_url);
+bool DropDirectory(const wchar_t *directory);
 int vMakeMessage(char **buffer, const char *format, va_list ap);
 int MakeMessage(char **buffer, const char *format, ...);
-bool ProcessResponseFolderInfo(ResponceFolderInfo *info);
-bool ProcessResponseFilePath(wchar_t *value, ResponceFolderInfo *pathInfo, const wchar_t *fileName, const char *variableName);
-int vAddLogBuffer(LogBuffer *logBuffer, const char *dataFormat, va_list ap);
-int AddLogBuffer(LogBuffer *logBuffer, const char *dataFormat, ...);
-void FlushLogBuffer(LogBuffer *logBuffer);
-int SIWrap_vAddLogBuffer(void *logBuffer, const char *format, va_list ap);
-int SIWrap_vfprintf(void *file, const char *format, va_list ap);
-int WriteStream(StreamInfo *info, const char *format, ...);
+bool ProcessResponseFolderInfo(ResponseFolderInfo *info, const wchar_t *fileName);
+int PrintStream(StreamInfo *info, const char *format, ...);
 bool WriteCurlResponseCode(CURL *easy, StreamInfo *stream, long *responseCode);
 bool WriteCurlContentType(CURL *easy, StreamInfo *stream, char **contentType);
+bool WriteStream(StreamInfo *info, const char *data, size_t dataLength);
+bool SIWrap_fwrite(void *streamInfo, const char *data, size_t dataLength);
+bool WriteMemoryBuffer(MemoryBuffer *memoryBuffer, const char *data, size_t dataLength);
+bool SIWrap_WriteMemoryBuffer(void *memoryBuffer, const char *data, size_t dataLength);
+void FlushMemoryBufferToFile(MemoryBuffer *buffer, FILE *file);
+wchar_t *GetExtentionFromContentType(const char *contentType);
 
 void Wrap_FindClose(const void *arg);
 void Wrap_CoTaskMemFree(const void *arg);
@@ -132,18 +208,13 @@ int main(void)
         return STANDARD_ERROR;
     }
     PushCleanupStack(cleanupStack, Wrap_FClose, &log);      // (1 глобально)
-
+    
     LogWstring("[DEBUG] Current app folder (CWD with no \\bin): \"%s\"\n", appFolder, "cwd");
     LogWstring("[DEBUG] app.log Path: \"%s\"\n", logPath, "logPath");
 
-    ResponceFolderInfo pages, favicons;
-    pages.folderName = FOLDER_PAGES_L;
-    pages.extentionOfFiles = EXTENTION_OF_FILES_PAGES_L;
-    if (!ProcessResponseFolderInfo(&pages)) return STANDARD_ERROR;   // (cleanup stack 2 глобально)
-
-    favicons.folderName = FOLDER_FAVICONS_L;
-    favicons.extentionOfFiles = EXTENTION_OF_FILES_FAVICONS_L;
-    if (!ProcessResponseFolderInfo(&favicons)) return STANDARD_ERROR;      // (cleanup stack 3 глобально)
+    ResponseFolderInfo pages, favicons;
+    if (!ProcessResponseFolderInfo(&pages, FOLDER_PAGES_L)) return STANDARD_ERROR;          // (cleanup stack 2 глобально)
+    if (!ProcessResponseFolderInfo(&favicons, FOLDER_FAVICONS_L)) return STANDARD_ERROR;    // (cleanup stack 3 глобально)
 
     wchar_t *desktopPath = NULL;
     HRESULT desktopPathResult = SHGetKnownFolderPath // взять путь до определённой папки
@@ -217,7 +288,7 @@ int main(void)
         fprintf(log, "\n|==================================================================================|\n\n");
         LogWstring("[DEBUG] File name: \"%s\"\n", fileData.cFileName, "fileData.cFileName");
         //создать буффер для хранения информации о ярлыках
-        if (iconsProcessContainer.occupedUnits >= iconsProcessContainer.capacity)
+        if (iconsProcessContainer.occupiedUnits >= iconsProcessContainer.capacity)
         {
             iconsProcessContainer.capacity += BUFFER_ADDITION;
             IconProcessUnit **temp = realloc(iconsProcessContainer.array, iconsProcessContainer.capacity * sizeof(IconProcessUnit *)); //выделили новый массив, количество элементов: старое количество + немного ещё
@@ -228,13 +299,15 @@ int main(void)
             }
             iconsProcessContainer.array = temp;
         }
-        IconProcessUnit *currentUnit = iconsProcessContainer.array[iconsProcessContainer.occupedUnits++] = malloc(sizeof(IconProcessUnit));
+        IconProcessUnit *currentUnit = iconsProcessContainer.array[iconsProcessContainer.occupiedUnits++] = malloc(sizeof(IconProcessUnit));
         if (!currentUnit)
         {
             FatalError("malloc() failed. Var: currentUnit");
             return STANDARD_ERROR;
         }
         *currentUnit = (IconProcessUnit){ .downloadingPage = true };
+
+        StringCchCopyW(currentUnit->fileName, MAX_PATH, fileData.cFileName);
 
         //получить абсолютный путь до ярлыка
         wchar_t CurrentDesktopFileAbsolutePath[MAX_PATH];
@@ -245,11 +318,26 @@ int main(void)
         }
         LogWstring("[DEBUG] absolute path: \"%s\"\n", CurrentDesktopFileAbsolutePath, "CurrentDesktopFileAbsolutePath");
 
-        if (!ProcessResponseFilePath(currentUnit->pageResponseFilePath, &pages, fileData.cFileName, "currentUnit->pageResponceFilePath")) continue;
-        if (!ProcessResponseFilePath(currentUnit->faviconResponseFilePath, &favicons, fileData.cFileName, "currentUnit->faviconResponceFilePath")) continue;
+        if
+        (
+            FAILED(StringCchPrintfW(currentUnit->pageResponseFilePath, MAX_PATH, L"%ls%ls", pages.path, fileData.cFileName)) ||
+            PathCchRenameExtension(currentUnit->pageResponseFilePath, MAX_PATH, DEFAULT_EXTENTION_OF_FILES_PAGES_L) != S_OK
+        )
+        {
+            fprintf(log, "[ERROR] Could not build absolute path to debug\\responce\\* file. StringCchPrintfW() or PathCchRenameExtension() failed\n");
+            continue;
+        }
+        char *formatForLogWstring = NULL;
+        MakeMessage(&formatForLogWstring, "[DEBUG] \"%s\" responce file path: \"%%s\"\n", pages.folderNameUtf8);
+        if (formatForLogWstring)
+        {
+            LogWstring(formatForLogWstring, currentUnit->pageResponseFilePath, "currentUnit->pageResponseFilePath");
+            free(formatForLogWstring);
+        }
+        else fprintf(log, "[ERROR] Successfuly build responce file path however could not build informative message for app.log. MakeMessage() failed\n");
 
         //скопировать ini–текст из ярлыков
-        LARGE_INTEGER fileSize = (LARGE_INTEGER){.LowPart = fileData.nFileSizeLow, .HighPart = fileData.nFileSizeHigh};
+        LARGE_INTEGER fileSize = (LARGE_INTEGER){ .LowPart = fileData.nFileSizeLow, .HighPart = fileData.nFileSizeHigh };
         char *content = malloc(fileSize.QuadPart);  //создать буффер для копирования
         if(!content)
         {
@@ -267,7 +355,7 @@ int main(void)
         PushCleanupStack(cleanupStack, Wrap_FClose, &currentDesktopFile);   // (7 глобально +2 временно ->9)
         fread(content, 1, fileSize.QuadPart, currentDesktopFile);
 
-        currentUnit->url = ParceIniText(content, fileSize.QuadPart);   
+        currentUnit->url = ParseIniText(content, fileSize.QuadPart);   
         if (!currentUnit->url)
         {
             fprintf(log, "[ERROR] Could parse .url content. ParceFileText() failed\n");
@@ -282,6 +370,7 @@ int main(void)
             PartialDeallocation(cleanupStack, 2);   //(9->7)
             continue;
         }
+        currentUnit->writeStream = (StreamInfo){ currentUnit->responseFile, SIWrap_fwrite };
         
         if (!(currentUnit->easy = curl_easy_init()))
         {
@@ -289,9 +378,10 @@ int main(void)
             PartialDeallocation(cleanupStack, 2);   //(9->7)
             continue;
         }
+
         curl_easy_setopt(currentUnit->easy, CURLOPT_URL, currentUnit->url);                 //url по которому обращаться
         curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEFUNCTION, WriteCallback);          //колбек когда приходят данные
-        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, &currentUnit->responseFile); //параметр, с которым вызывается колбек
+        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, &currentUnit->writeStream);  //параметр, с которым вызывается колбек
         curl_easy_setopt(currentUnit->easy, CURLOPT_PRIVATE, currentUnit);                  //ассоциация easy с IconProcessUnit
         curl_easy_setopt(currentUnit->easy, CURLOPT_TIMEOUT, 15L);                          //Запрос длиться не более 15 секунд
         curl_easy_setopt(currentUnit->easy, CURLOPT_FOLLOWLOCATION, 1L);                    //Редиректы
@@ -311,7 +401,7 @@ int main(void)
     fprintf(log, "[DEBUG] Started transfers cycle ...\n");
 
     int runningHandles; //склько запросов ещё НЕ завершились
-    size_t successfulHtmlResponses = 0, successfulFaviconResponses = 0;
+    size_t pagesResponses = 0, successfulPagesResponses = 0, faviconResponses = 0, successfulFaviconResponses = 0;
     do
     {
         if(curl_multi_perform(iconsProcessContainer.multi, &runningHandles) != CURLM_OK)
@@ -327,12 +417,12 @@ int main(void)
         {
             if (curlMsg->msg == CURLMSG_DONE)
             {
+                StreamInfo logFileStream = { log, SIWrap_fwrite };
                 CURL *easy = curlMsg->easy_handle;  //завершенный easy
-                StreamInfo fileStream = { log, SIWrap_vfprintf };
                 IconProcessUnit *ipu = NULL;
                 if (curl_easy_getinfo(easy, CURLINFO_PRIVATE, &ipu) != CURLE_OK)
                 {
-                    WriteStream(&fileStream, "[ERROR] Could not get info about transfer. curl_easy_getinfo(CURLINFO_PRIVATE) failed");
+                    CurlGetinfoFailMessage(&logFileStream, "CURLINFO_PRIVATE");
                     continue;
                 }
 
@@ -340,126 +430,155 @@ int main(void)
                 char *contentType = NULL;
                 if (ipu->downloadingPage)
                 {
+                    ++pagesResponses;
                     ipu->downloadingPage = false;
-                    StreamInfo logBufferStream = { &ipu->logBuffer, SIWrap_vAddLogBuffer };
+                    StreamInfo logBufferStream = { &ipu->logBuffer, SIWrap_WriteMemoryBuffer};
                     
-                    WriteStream
+                    PrintStream
                     (
                         &logBufferStream,
-                        "[DEBUG] Page transfer finished\n[DEBUG] Exit code:               %s\n[DEBUG] Initial URL:             %s\n", 
+                        "\n|==================================================================================|\n\n[DEBUG] Page transfer finished\n[DEBUG] Exit code:               %s\n[DEBUG] Initial URL:             %s\n", 
                         curl_easy_strerror(curlMsg->data.result), 
                         ipu->url
                     );
                     char *lastUrl = NULL;
                     if (curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &lastUrl) != CURLE_OK)
                     {
-                        FlushLogBuffer(&ipu->logBuffer);
-                        CurlGetinfoFailMessage(&fileStream, "CURLINFO_EFFECTIVE_URL");
+                        FlushMemoryBufferToFile(&ipu->logBuffer, log);
+                        CurlGetinfoFailMessage(&logFileStream, "CURLINFO_EFFECTIVE_URL");
                         continue;
                     }
-                    WriteStream(&logBufferStream, "[DEBUG] last used effective URL: %s\n", lastUrl);
+                    PrintStream(&logBufferStream, "[DEBUG] last used effective URL: %s\n", lastUrl);
                     
                     if (!WriteCurlResponseCode(easy, &logBufferStream, &responseCode))
                     {
-                        FlushLogBuffer(&ipu->logBuffer);
+                        FlushMemoryBufferToFile(&ipu->logBuffer, log);
                         continue;
                     } 
                     if (!WriteCurlContentType(easy, &logBufferStream, &contentType))
-                    {
-                        FlushLogBuffer(&ipu->logBuffer);
+                    {                        
+                        FlushMemoryBufferToFile(&ipu->logBuffer, log);
                         continue;
                     }
                     
                     bool ableParseHTML = true;
                     if (responseCode != 200)
                     {
-                        WriteStream(&logBufferStream, "[ERROR] Response code is not 200\n");
+                        PrintStream(&logBufferStream, "[ERROR] Response code is not 200\n");
                         ableParseHTML = false;
                     }
                     char *targetType = "text/html";
                     if (strncmp(contentType, targetType, strlen(targetType)))
                     {
-                        WriteStream(&logBufferStream, "[ERROR] Response content type was not recognized as \"%s\"\n", targetType);
+                        PrintStream(&logBufferStream, "[ERROR] Response content type was not recognized as \"%s\"\n", targetType);
                         ableParseHTML = false;
                     }
 
                     if (ableParseHTML)
                     {
-                        ++successfulHtmlResponses;
-
                         fclose(ipu->responseFile);
                         if (!(ipu->responseFile = _wfopen(ipu->pageResponseFilePath, L"rb")))
                         {
-                            FlushLogBuffer(&ipu->logBuffer);
-                            WriteStream(&fileStream, "[ERROR] Could not open responce file. _wfopen() failed");
+                            FlushMemoryBufferToFile(&ipu->logBuffer, log);
+                            PrintStream(&logFileStream, "[ERROR] Could not open responce file. _wfopen() failed");
                             continue;
                         }
                         WIN32_FILE_ATTRIBUTE_DATA responceFileData;
                         if (!GetFileAttributesExW(ipu->pageResponseFilePath, GetFileExInfoStandard, &responceFileData))
                         {
-                            FlushLogBuffer(&ipu->logBuffer);
-                            WriteStream(&fileStream, "[ERROR] Could not get size of responce file. GetFileAttributesExW() failed\n");
+                            FlushMemoryBufferToFile(&ipu->logBuffer, log);
+                            PrintStream(&logFileStream, "[ERROR] Could not get size of responce file. GetFileAttributesExW() failed\n");
                             continue;
                         }
                         ULARGE_INTEGER responceFileSize = { .LowPart = responceFileData.nFileSizeLow, .HighPart = responceFileData.nFileSizeHigh };
+                        if (responceFileSize.QuadPart > INT_MAX)
+                        {
+                            FlushMemoryBufferToFile(&ipu->logBuffer, log);
+                            PrintStream(&logFileStream, "[ERROR] Response size exceeds INT_MAX and can not be processed\n");
+                            continue;
+                        }
                         char *buffer = malloc(responceFileSize.QuadPart);
                         if (!buffer)
                         {
-                            FlushLogBuffer(&ipu->logBuffer);
-                            WriteStream(&fileStream, "[ERROR] malloc() failed\n");
+                            FlushMemoryBufferToFile(&ipu->logBuffer, log);
+                            PrintStream(&logFileStream, "[ERROR] malloc() failed\n");
                             continue;
                         }
                         PushCleanupStack(cleanupStack, Wrap_Free, &buffer);     //(7 глобально +1 временно ->8)
 
                         fread(buffer, 1, responceFileSize.QuadPart, ipu->responseFile);
-                        char *faviconUrl = GetFaviconUrl(buffer, responceFileSize.QuadPart, lastUrl);
+                        char *faviconUrl = GetFaviconUrl(buffer, (int)responceFileSize.QuadPart, lastUrl);
                         if(!faviconUrl)
                         {
-                            FlushLogBuffer(&ipu->logBuffer);
-                            WriteStream(&fileStream, "[ERROR] Could not get favicon url. GetFaviconUrl() failed.\n");
+                            FlushMemoryBufferToFile(&ipu->logBuffer, log);
+                            PrintStream(&logFileStream, "[ERROR] Could not get favicon url. GetFaviconUrl() failed.\n");
                             SingleDeallocation(cleanupStack);   //(8->7)
                             continue;
                         }
                         PushCleanupStack(cleanupStack, Wrap_Free, &faviconUrl);     //(7 глобально +2 временно ->9)
-                        WriteStream(&logBufferStream, "[DEBUG] Favicon url: %s\n", faviconUrl);
+                        PrintStream(&logBufferStream, "[DEBUG] Favicon url: %s\n", faviconUrl);
                         
-                        fclose(ipu->responseFile);
-                        if (!(ipu->responseFile = _wfopen(ipu->faviconResponseFilePath, L"wb")))
-                        {
-                            FlushLogBuffer(&ipu->logBuffer);
-                            WriteStream(&fileStream, "[ERROR] Could not open file for favicon responce\n");
-                            PartialDeallocation(cleanupStack, 2);   //(9->7)
-                            continue;
-                        }
                         curl_multi_remove_handle(iconsProcessContainer.multi, easy);
                         curl_easy_setopt(easy, CURLOPT_URL, faviconUrl); // перенастраиваем
                         curl_easy_setopt(easy, CURLOPT_TIMEOUT, 8L);
                         curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 0L);
                         curl_multi_add_handle(iconsProcessContainer.multi, easy);
 
-                        WriteStream(&logBufferStream, "[DEBUG] Successfuly configured curl easy handle to download favicon\n");
+                        fclose(ipu->responseFile);
+                        ipu->responseFile = NULL;
+                        ipu->writeStream = (StreamInfo){ &ipu->faviconBuffer, SIWrap_WriteMemoryBuffer};
+
+                        ++successfulPagesResponses;
+                        PrintStream(&logBufferStream, "[DEBUG] Successfuly configured curl easy handle to download favicon\n");
                         PartialDeallocation(cleanupStack, 2);       //(9->7)
                     }
-                    else FlushLogBuffer(&ipu->logBuffer);
+                    else FlushMemoryBufferToFile(&ipu->logBuffer, log);
                 }
                 else
                 {
-                    ++successfulFaviconResponses;
-                    FlushLogBuffer(&ipu->logBuffer);
-                    WriteStream(&fileStream, "\n        -------- transfering favicon --------\n\n");
+                    ++faviconResponses;
+                    FlushMemoryBufferToFile(&ipu->logBuffer, log);
+                    fprintf(log, "\n        -------- transfering favicon --------\n\n");
 
-                    if (!WriteCurlResponseCode(easy, &fileStream, &responseCode)) continue;
-                    if (!WriteCurlContentType(easy, &fileStream, &contentType)) continue;
+                    if (!WriteCurlResponseCode(easy, &logFileStream, &responseCode)) continue;
+                    if (!WriteCurlContentType(easy, &logFileStream, &contentType)) continue;
+
+                    wchar_t *extention;
+                    if 
+                    (
+                        !(extention = GetExtentionFromContentType(contentType)) ||
+                        FAILED(StringCchPrintfW(ipu->faviconResponseFilePath, MAX_PATH, L"%ls%ls", favicons.path, ipu->fileName)) ||
+                        PathCchRenameExtension(ipu->faviconResponseFilePath, MAX_PATH, extention) != S_OK
+                    )
+                    {
+                        fprintf(log, "[ERROR] Could not build path to file for favicon response\n");
+                        continue;
+                    }
+                    LogWstring("[DEBUG] Extention of file for favicon response: %s\n", extention, "extention");
+                    LogWstring("[DEBUG] Built path of file for favicon response: %s\n", ipu->faviconResponseFilePath, "ipu->faviconResponseFilePath");
+
+                    if (!(ipu->responseFile = _wfopen(ipu->faviconResponseFilePath, L"wb")))
+                    {
+                        fprintf(log, "[ERROR] Could not open file for favicon response\n");
+                        continue;
+                    }
+                    FlushMemoryBufferToFile(&ipu->faviconBuffer, ipu->responseFile);
+
+                    ++successfulFaviconResponses;
                 }
             }
         }
     }
     while (runningHandles);
     fprintf(log, "\n|==================================================================================|\n\n[DEBUG] transfers cycle finished\n");
-    fprintf(log, "[INFO] Found files: %zd\n", iconsProcessContainer.occupedUnits);
+    fprintf(log, "[INFO] Found files: %zd\n", iconsProcessContainer.occupiedUnits);
     fprintf(log, "[INFO] Processed files correctly: %zd\n", DesktopFilesProcessedCorrectly);
-    fprintf(log, "[INFO] Successful \"%s\" responses: %zd\n", pages.folderNameUtf8, successfulHtmlResponses);
-    fprintf(log, "[INFO] Successful \"%s\" responses: %zd\n", favicons.folderNameUtf8, successfulFaviconResponses);
+
+
+    if (pages.folderNameUtf8) fprintf(log, "[INFO] \"%s\" responses: %zd\n[INFO] Successful \"%s\" responses: %zd\n", pages.folderNameUtf8, pagesResponses, pages.folderNameUtf8, successfulPagesResponses);
+    else fprintf(log, "[ERROR] Unknown responces: %zd\n[ERROR]Successful unknown responses: %zd\n", pagesResponses, successfulPagesResponses);
+    if (favicons.folderNameUtf8) fprintf(log, "[INFO] \"%s\" responses: %zd\n[INFO] Successful \"%s\" responses: %zd\n", favicons.folderNameUtf8, faviconResponses, favicons.folderNameUtf8, successfulFaviconResponses);
+    else fprintf(log, "[ERROR] Unknown responces: %zd\n[ERROR] Successful unknown responces: %zd\n", faviconResponses, successfulFaviconResponses);
     
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
     CompleteDeallocation(cleanupStack);
@@ -476,7 +595,7 @@ size_t WriteCallback
     void *userdata  //пользовательские данные. Задаётся через curl_easy_setopt(easy, CURLOPT_WRITEDATA, somePtr). Я здесь получаю IconProcessUnit *
 )
 {
-    fwrite(ptr, 1, size *= nmemb, *(FILE **)userdata);
+    WriteStream((StreamInfo *)userdata, ptr, size *= nmemb);
     return size;    //функция должна возвращать количество обработаных байтов
 }
 
@@ -505,16 +624,11 @@ void LogWstring(const char *format, const wchar_t *wstr, const char *var)
     else fprintf(log, "[ERROR] Could not convert (wchar_t *)%s to utf-8. WstringToUtf8() failed\n", var);
 }
 
-void CurlGetinfoFailMessage(StreamInfo *streamInfo, const char *type) 
-{
-    WriteStream(streamInfo, "[ERROR] Could not get info from curl easy handle. curl_easy_getinfo(%s) failed\n", type);
-}
-
-bool DropDirectory(const wchar_t *directory, const wchar_t *extention)
+bool DropDirectory(const wchar_t *directory)
 {
     wchar_t searchToken[MAX_PATH];
     bool returnValue = true;
-    if(FAILED(StringCchPrintfW(searchToken, MAX_PATH, L"%ls*.%ls", directory, extention))) return false;
+    if(FAILED(StringCchPrintfW(searchToken, MAX_PATH, L"%ls*", directory))) return false;
     WIN32_FIND_DATAW fileData;
     HANDLE searchHandle = FindFirstFileW(searchToken, &fileData);        // получить дескриптор поиска и получить первый файл
     if (searchHandle == INVALID_HANDLE_VALUE)
@@ -530,7 +644,26 @@ bool DropDirectory(const wchar_t *directory, const wchar_t *extention)
             returnValue = false;
             continue;
         }
-        if(!DeleteFileW(absoluteFilePath)) returnValue = false;
+        if (fileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        {
+            if
+            (
+                wcscmp(fileData.cFileName, L".") == 0 ||
+                wcscmp(fileData.cFileName, L"..") == 0
+            ) continue;
+            if (SUCCEEDED(StringCchCatW(absoluteFilePath, MAX_PATH, L"\\")))
+            {
+                returnValue = false;
+                continue;
+            }
+            if (!DropDirectory(absoluteFilePath))
+            {
+                returnValue = false;
+                continue;
+            }
+            if (!RemoveDirectoryW(absoluteFilePath)) returnValue = false;
+        }
+        else if(!DeleteFileW(absoluteFilePath)) returnValue = false;
     } 
     while (FindNextFileW(searchHandle, &fileData));
     if (GetLastError() != ERROR_NO_MORE_FILES) returnValue = false;
@@ -543,18 +676,17 @@ int vMakeMessage(char **buffer, const char *format, va_list ap)
     if (format == NULL || buffer == NULL) return -1;
     va_list ap_copy;
     va_copy(ap_copy, ap);
-    int len = vsnprintf(NULL, 0, format, ap);
+    int len = vsnprintf(NULL, 0, format, ap_copy);
+    va_end(ap_copy);
     if (len >= 0)
     {
         if (*buffer = malloc((size_t)len + 1))
         {
-            vsnprintf(*buffer, (size_t)len + 1, format, ap_copy);
-            va_end(ap_copy);
+            vsnprintf(*buffer, (size_t)len + 1, format, ap);
             return len;
         }
     }
     else *buffer = NULL;
-    va_end(ap_copy);
     return -1;
 }
 
@@ -567,11 +699,11 @@ int MakeMessage(char **buffer, const char *format, ...)
     return len;
 }
 
-bool ProcessResponseFolderInfo(ResponceFolderInfo *info)
+bool ProcessResponseFolderInfo(ResponseFolderInfo *info, const wchar_t *folderName)
 {
     PushCleanupStack(cleanupStack, ResponseFolderInfoDestructor, info);
-    info->folderNameUtf8 = WstringToUtf8(info->folderName);
-    if (FAILED(StringCchPrintfW(info->path, MAX_PATH, L"%ls\\responce\\%ls\\", appFolder, info->folderName)))
+    info->folderNameUtf8 = WstringToUtf8(folderName);
+    if (FAILED(StringCchPrintfW(info->path, MAX_PATH, L"%ls\\responce\\%ls\\", appFolder, folderName)))
     {
         if (!info->folderNameUtf8) FatalError("Could not make utf8 string from wide-char to build error message. WstringToUtf8() failed");
         char *errorMessage = NULL;
@@ -593,94 +725,37 @@ bool ProcessResponseFolderInfo(ResponceFolderInfo *info)
             free(pathUtf8);
         }
         else fprintf(log, "[ERROR] Successfuly build path, however could not convert path to utf8 for app.log. WstringToUtf8() failed");
-        if (DropDirectory(info->path, info->extentionOfFiles))
+        if (DropDirectory(info->path))
             fprintf(log, "[DEBUG] Directory cleaned up.\n");
         else fprintf(log, "[ERROR] Failed to clean up directory. Some files may remain\n");
     }
     return true;
 }
 
-bool ProcessResponseFilePath(wchar_t *value, ResponceFolderInfo *pathInfo, const wchar_t *fileName, const char *variableName)
-{
-    if
-    (
-        FAILED(StringCchPrintfW(value, MAX_PATH, L"%ls%ls", pathInfo->path, fileName)) ||
-        PathCchRenameExtension(value, MAX_PATH, pathInfo->extentionOfFiles) != S_OK
-    )
-    {
-        fprintf(log, "[ERROR] Could not build absolute path to one of debug\\responce\\* file. StringCchPrintfW() or PathCchRenameExtension() failed\n");
-        return false;
-    }
-    char *formatForLogWstring = NULL;
-    MakeMessage(&formatForLogWstring, "[DEBUG] \"%s\" responce file path: \"%%s\"\n", pathInfo->folderNameUtf8);
-    if (!formatForLogWstring)
-    {
-        fprintf(log, "[ERROR] Successfuly build responce file path however could not build informative message for app.log. MakeMessage() failed\n");
-        return true;
-    }
-    LogWstring(formatForLogWstring, value, variableName);
-    free(formatForLogWstring);
-    return true;
-}
 
-int vAddLogBuffer(LogBuffer *logBuffer, const char *dataFormat, va_list ap)
-{
-    char *data = NULL;
-    int dataLength = vMakeMessage(&data, dataFormat, ap);
-    if (dataLength >= 0)
-    {
-        char *temp = realloc(logBuffer->content, logBuffer->length + dataLength + 1);
-        if (temp) 
-        {
-            logBuffer->content = temp;
-            memcpy(logBuffer->content + logBuffer->length, data, dataLength + 1);
-            logBuffer->length += dataLength;
-            free(data);
-            return dataLength;
-        }
-        free(data);
-    }
-    return -1;
-}
-
-int AddLogBuffer(LogBuffer *logBuffer, const char *dataFormat, ...)
-{
-    va_list ap;
-    va_start(ap, dataFormat);
-    int writtenBytes = vAddLogBuffer(logBuffer, dataFormat, ap);
-    va_end(ap);
-    return writtenBytes;
-}
-
-void FlushLogBuffer(LogBuffer *logBuffer)
-{
-    fprintf(log, "\n|==================================================================================|\n\n%s", logBuffer->content);
-}
-
-int SIWrap_vAddLogBuffer(void *logBuffer, const char *format, va_list ap)
-{
-    return vAddLogBuffer((LogBuffer *)logBuffer, format, ap);
-}
-
-int SIWrap_vfprintf(void *file, const char *format, va_list ap)
-{
-    return vfprintf((FILE *)file, format, ap);
-}
-
-int WriteStream(StreamInfo *stream, const char *format, ...)
+int PrintStream(StreamInfo *info, const char *format, ...)
 {
     va_list ap;
     va_start(ap, format);
-    int writtenBytes = stream->func(stream->stream, format, ap);
+    char *data;
+    int dataLength = vMakeMessage(&data, format, ap);
     va_end(ap);
-    return writtenBytes;
+    if (dataLength < 0) return -1;
+    bool res = WriteStream(info, data, dataLength);
+    free(data);
+    return res ? dataLength : -1;
+}
+
+void CurlGetinfoFailMessage(StreamInfo *streamInfo, const char *type) 
+{
+    PrintStream(streamInfo, "[ERROR] Could not get info from curl easy handle. curl_easy_getinfo(%s) failed\n", type);
 }
 
 bool WriteCurlResponseCode(CURL *easy, StreamInfo *stream, long *responseCode)
 {
     if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, responseCode) == CURLE_OK)
     {
-        WriteStream(stream, "[DEBUG] Response code:           %ld\n", *responseCode);
+        PrintStream(stream, "[DEBUG] Response code:           %ld\n", *responseCode);
         return true;
     }
     else 
@@ -696,13 +771,61 @@ bool WriteCurlContentType(CURL *easy, StreamInfo *stream, char **contentType)
     {
         if (*contentType)
         {
-            WriteStream(stream, "[DEBUG] Content type:            %s\n", *contentType);
+            PrintStream(stream, "[DEBUG] Content type:            %s\n", *contentType);
             return true;
         }
-        else WriteStream(stream, "[ERROR] The server did not send a valid Content-Type header or the protocol used does not support this\n");
+        else PrintStream(stream, "[ERROR] The server did not send a valid Content-Type header or the protocol used does not support this\n");
     }
     else CurlGetinfoFailMessage(stream, "CURLINFO_CONTENT_TYPE");
     return false;
+}
+
+bool WriteStream(StreamInfo *info, const char *data, size_t dataLength)
+{
+    return info->write(info->stream, data, dataLength);
+}
+
+bool SIWrap_fwrite(void *file, const char *data, size_t dataLength)
+{
+    fwrite(data, 1, dataLength, (FILE *)file);
+    return true;
+}
+
+bool WriteMemoryBuffer(MemoryBuffer *memoryBuffer, const char *data, size_t dataLength)
+{
+    char *temp = realloc(memoryBuffer->content, memoryBuffer->length + dataLength);
+    if (!temp) return false;
+    memoryBuffer->content = temp;
+    memcpy(memoryBuffer->content + memoryBuffer->length, data, dataLength);
+    memoryBuffer->length += dataLength;
+    return true;
+}
+
+bool SIWrap_WriteMemoryBuffer(void *memoryBuffer, const char *data, size_t dataLength)
+{
+    return WriteMemoryBuffer((MemoryBuffer *)memoryBuffer, data, dataLength);
+}
+
+void FlushMemoryBufferToFile(MemoryBuffer *buffer, FILE *file)
+{
+    fwrite(buffer->content, 1, buffer->length, file);
+}
+
+wchar_t *GetExtentionFromContentType(const char *contentType)
+{
+    for (size_t i = 0; i < contentTypes.quantity; ++i)
+    {
+        if 
+        (
+            strncmp
+            (
+                contentType, 
+                contentTypes.array[i].faviconContentType, 
+                strlen(contentTypes.array[i].faviconContentType)
+            ) == 0
+        )  return contentTypes.array[i].imageContentType;
+    }
+    return NULL;
 }
 
 static void FatalError(const char *message)
@@ -736,11 +859,12 @@ void Wrap_Free(const void *arg)
 void IconsProcessContainerDestructor(const void *arg)
 {
     IconsProcessContainer *container = (IconsProcessContainer *)arg;
-    while (container->occupedUnits > 0)
+    while (container->occupiedUnits > 0)
     {
-        IconProcessUnit *unit = container->array[--container->occupedUnits];
+        IconProcessUnit *unit = container->array[--container->occupiedUnits];
         free(unit->url);
         free(unit->logBuffer.content);
+        free(unit->faviconBuffer.content);
         if (unit->responseFile) fclose(unit->responseFile);
         if(unit->easy)
         {
@@ -765,12 +889,12 @@ void Wrap_curl_global_cleanup(const void *arg)
 
 void ResponseFolderInfoDestructor(const void *arg)
 {
-    free((*(ResponceFolderInfo *)arg).folderNameUtf8);
+    free((*(ResponseFolderInfo *)arg).folderNameUtf8);
 }
 
 
 
-char *GetFaviconUrl(const char *buffer, size_t size, const char *base_url)
+char *GetFaviconUrl(const char *buffer, int size, const char *base_url)
 {
     xmlDocPtr doc = htmlReadMemory(
         buffer,
@@ -810,19 +934,19 @@ char *GetFaviconUrl(const char *buffer, size_t size, const char *base_url)
             href = xmlNodeGetContent(result->nodesetval->nodeTab[0]);
     }
 
-    char *final_url = NULL;
+    char *finalUrl = NULL;
     if (href)
     {
         // если ссылка абсолютная
         if (strstr((char *)href, "http://") || strstr((char *)href, "https://"))
-            final_url = strdup((char *)href);
+            finalUrl = strdup((char *)href);
         else
         {
-            // относительная → делаем абсолютную
+            // относительная -> делаем абсолютную
             xmlChar *abs = xmlBuildURI(href, (xmlChar *)base_url);
             if (abs)
             {
-                final_url = strdup((char *)abs);
+                finalUrl = strdup((char *)abs);
                 xmlFree(abs);
             }
         }
@@ -832,5 +956,5 @@ char *GetFaviconUrl(const char *buffer, size_t size, const char *base_url)
     xmlXPathFreeObject(result);
     xmlXPathFreeContext(ctx);
     xmlFreeDoc(doc);
-    return final_url;
+    return finalUrl;
 }

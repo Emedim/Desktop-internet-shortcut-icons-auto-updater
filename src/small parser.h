@@ -9,6 +9,6 @@ typedef struct
     size_t seek;
 } BufferContext;
 
-byte *ParceIniText(const byte *text, size_t textLength);
+byte *ParseIniText(const byte *text, size_t textLength);
 
 #endif
