@@ -9,7 +9,11 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "C:/non-system_programs/vcpkg/installed/x64-windows/include",
-                "C:/non-system_programs/vcpkg/installed/x64-windows/include/libxml2"
+                "C:/non-system_programs/vcpkg/installed/x64-windows/include/libxml2",
+                "C:/non-system_programs/dev_libraries/vips-dev-8.18/include",
+                "C:/non-system_programs/dev_libraries/vips-dev-8.18/include/vips",
+                "C:/non-system_programs/dev_libraries/vips-dev-8.18/include/glib-2.0",
+                "C:/non-system_programs/dev_libraries/vips-dev-8.18/lib/glib-2.0/include"
             ]
         }
     ]

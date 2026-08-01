@@ -2,12 +2,17 @@
 cd /d "%~dp0\.."
 call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
 set "VCPKG=C:\non-system_programs\vcpkg\installed\x64-windows"
+set "LIBVIPS=C:\non-system_programs\dev_libraries\vips-dev-8.18"
 cl src\main.c ^
-   "src\cleanup interface.c"^
-   "src\small parser.c"^
-   /I"%VCPKG%\include"^
-   /I"%VCPKG%\include\libxml2"^
-   /utf-8^
+   "src\cleanup interface.c" ^
+   "src\small parser.c" ^
+   /I"%VCPKG%\include" ^
+   /I"%VCPKG%\include\libxml2" ^
+   /I"%LIBVIPS%\include" ^
+   /I"%LIBVIPS%\include\vips" ^
+   /I"%LIBVIPS%\include\glib-2.0" ^
+   /I"%LIBVIPS%\lib\glib-2.0\include" ^
+   /utf-8 ^
    /Zi ^
    /Od ^
    /W4 ^
@@ -16,13 +21,18 @@ cl src\main.c ^
    /Fd:build\app.pdb ^
    /link ^
    /LIBPATH:"%VCPKG%\lib" ^
-   libxml2.lib^
+   libxml2.lib ^
    libcurl.lib ^
+   /LIBPATH:"%LIBVIPS%\lib" ^
+   libvips.lib ^
+   libglib-2.0.lib ^
+   libgobject-2.0.lib ^
+   libgio-2.0.lib ^
    /PDB:build\app_link.pdb ^
    /INCREMENTAL:NO^
-   user32.lib^
-   Shell32.lib^
-   Pathcch.lib^
+   user32.lib ^
+   Shell32.lib ^
+   Pathcch.lib ^
    Ole32.lib
 
 rem /Zi     – включает отладочную информацию

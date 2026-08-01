@@ -128,4 +128,5 @@ byte *ParseIniText(const byte *text, size_t textLength)
         }
         SkipCurrentLine(&bufferCtx);
     }
+    return NULL;
 }
