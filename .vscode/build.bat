@@ -6,6 +6,7 @@ set "LIBVIPS=C:\non-system_programs\dev_libraries\vips-dev-8.18"
 cl src\main.c ^
    "src\cleanup interface.c" ^
    "src\small parser.c" ^
+   "src\growing list.c" ^
    /I"%VCPKG%\include" ^
    /I"%VCPKG%\include\libxml2" ^
    /I"%LIBVIPS%\include" ^
@@ -33,7 +34,8 @@ cl src\main.c ^
    user32.lib ^
    Shell32.lib ^
    Pathcch.lib ^
-   Ole32.lib
+   Ole32.lib ^
+   Shlwapi.lib
 
 rem /Zi     – включает отладочную информацию
 rem /Od     – выключает оптимизации

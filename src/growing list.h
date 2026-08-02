@@ -10,7 +10,8 @@ typedef struct
 
 bool InitGrowingList(GrowingList *gl, void (*UnitDestroyFunc)(const void *));
 bool PushGrowingList(GrowingList *gl, void *unit);
-void DestroyGrowingList(GrowingList *gl);
 void *GetGrowingList(const GrowingList *gl, size_t index);
+void *PopGrowingList(GrowingList *gl);
+void DestroyGrowingList(GrowingList *gl);
 
 #endif
