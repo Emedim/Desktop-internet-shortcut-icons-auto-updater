@@ -7,6 +7,7 @@ cl src\main.c ^
    "src\cleanup interface.c" ^
    "src\small parser.c" ^
    "src\growing list.c" ^
+   "src\memory buffer.c" ^
    /I"%VCPKG%\include" ^
    /I"%VCPKG%\include\libxml2" ^
    /I"%LIBVIPS%\include" ^

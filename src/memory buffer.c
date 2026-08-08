@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #include "memory buffer.h"
 
 bool WriteMemoryBuffer(MemoryBuffer *memoryBuffer, const unsigned char *data, size_t dataLength)

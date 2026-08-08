@@ -4,7 +4,7 @@
 
 typedef struct      //структура: указатель на обобщённую функцию и параметр для неё
 {
-    void (*func)(const void *);    //сигнатура такой функции: void (*func)(const void *);
+    void (*func)(void *);    //сигнатура такой функции: void (*func)(const void *);
     void *arg;
 } GeneralizedResource;
 
@@ -20,20 +20,20 @@ CleanupStack InitCleanupStack(uint8_t totalResourcesQuantity)   /*создаёт
 {
     if(totalResourcesQuantity == 0 || totalResourcesQuantity == 255) return NULL;    //валидация: количество ресурсов стека очистки ∈ [1; 254]
     CleanupStack tempPtr = malloc(sizeof(CleanupStackObj));
-    if (tempPtr)    //если malloc вернул не NULL
+    if (tempPtr)
     {
-        tempPtr->deallocatingUnits = malloc(sizeof(GeneralizedResource) * totalResourcesQuantity); //получаем место под массив для регистрации ресурсов системы
-        if (!tempPtr->deallocatingUnits)    //если malloc вернул NULL
+        tempPtr->deallocatingUnits = malloc(sizeof(GeneralizedResource) * totalResourcesQuantity);
+        if (tempPtr->deallocatingUnits)
         {
-            free(tempPtr);
-            return NULL;
+            tempPtr->size = 0;
+            return tempPtr;
         }
-        tempPtr->size = 0;  //изначально ресурсов системы не выделено => стек пустой
-    }
-    return tempPtr; //возвращает либо указатель на созданый объект, либо NULL
+        free(tempPtr);
+    } 
+    return NULL;
 }
 
-void PushCleanupStack(CleanupStack cs, void (*func)(const void *), void *arg)  //регистрируем ресурс, передавая функцию, которая вернёт его системе и указатель на сам ресурс
+void PushCleanupStack(CleanupStack cs, void (*func)(void *), void *arg)  //регистрируем ресурс, передавая функцию, которая вернёт его системе и указатель на сам ресурс
 {
     cs->deallocatingUnits[cs->size++] = (GeneralizedResource){ func, arg }; //записываем полученные указатели в стек и увеличиваем количество зарегистрированных ресурсов на 1
 }

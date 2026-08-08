@@ -5,13 +5,14 @@ typedef struct
 {
     void **data;
     size_t length, capacity;
-    void (*UnitDestroyFunc)(const void *);
+    void (*UnitDestroyFunc)(void *);
 } GrowingList;
 
-bool InitGrowingList(GrowingList *gl, void (*UnitDestroyFunc)(const void *));
+bool InitGrowingList(GrowingList *gl, void (*UnitDestroyFunc)(void *));
 bool PushGrowingList(GrowingList *gl, void *unit);
 void *GetGrowingList(const GrowingList *gl, size_t index);
-void *PopGrowingList(GrowingList *gl);
 void DestroyGrowingList(GrowingList *gl);
+
+void *SearchGrowingList(GrowingList *gl, bool (*callback)(void *, void *), void *userData);
 
 #endif

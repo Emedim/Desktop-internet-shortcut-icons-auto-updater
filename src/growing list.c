@@ -7,7 +7,7 @@
 #define INITIAL_BUFFER_LENGTH (8)
 #define BUFFER_ADDITION (12)
 
-bool InitGrowingList(GrowingList *gl, void (*UnitDestroyFunc)(const void *))
+bool InitGrowingList(GrowingList *gl, void (*UnitDestroyFunc)(void *))
 {
     gl->length = 0;
     gl->data = malloc(INITIAL_BUFFER_LENGTH * sizeof(void *));
@@ -35,15 +35,25 @@ void *GetGrowingList(const GrowingList *gl, size_t index)
     return gl->data[index];
 }
 
-void *PopGrowingList(GrowingList *gl)
-{
-    return GetGrowingList(gl, --gl->length);
-}
-
 void DestroyGrowingList(GrowingList *gl)
 {
     if (gl->UnitDestroyFunc) 
+    {
         while(gl->length)
-            gl->UnitDestroyFunc(PopGrowingList(gl));
+        {
+            --gl->length;
+            gl->UnitDestroyFunc(GetGrowingList(gl, gl->length));
+        }
+    }
     free(gl->data);
+}
+
+void *SearchGrowingList(GrowingList *gl, bool (*callbackChecker)(void *, void *), void *userData)
+{
+    for (size_t index = 0; index < gl->length; ++index)
+    {
+        void *objPtr = GetGrowingList(gl, index);
+        if (callbackChecker(objPtr, userData)) return objPtr;
+    }
+    return false;
 }

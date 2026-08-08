@@ -1,59 +1,223 @@
 #include <stdbool.h>
 #include <windows.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include "growing list.h"
+#include "memory buffer.h"
 #include "small parser.h"
 
-#define LF '\n'
-#define CR '\r'
-#define SPACE ' '
+static bool ParseIniText(const unsigned char *text, const size_t textLength, IniFileInfo *iniFI);
 
-byte ToLower(byte symbol)
+IniFileInfo *NewIniFileInfo()
+{
+    IniFileInfo *new = malloc(sizeof(IniFileInfo));
+    if (new) *new = (IniFileInfo){ 0 };
+    return new;
+}
+
+IniSection *NewIniSection()
+{
+    IniSection *new = malloc(sizeof(IniSection));
+    if (new) *new = (IniSection){ 0 };
+    return new;
+}
+
+IniPair *NewIniPair()
+{
+    IniPair *new = malloc(sizeof(IniPair));
+    if (new) *new = (IniPair){ 0 };
+    return new;
+}
+
+void DestroyIniFileInfo(IniFileInfo *iniFI)
+{
+    if (iniFI->stream) fclose(iniFI->stream);
+    DestroyGrowingList(&iniFI->sections);
+    free(iniFI);
+}
+
+void DestroyIniSectionU(void *arg)
+{
+    IniSection *section = arg;
+    MemoryBufferDestructor(&section->name);
+    DestroyGrowingList(&section->iniPairs);
+    free(section);
+}
+
+void DestroyIniPairU(void *arg)
+{
+    IniPair *pair = arg;
+    MemoryBufferDestructor(&pair->key);
+    MemoryBufferDestructor(&pair->value);
+    free(pair);
+}
+
+IniFileInfo *InitIniInfo(const wchar_t *filePath)
+{
+    IniFileInfo *iniFI = NewIniFileInfo();
+    if (iniFI) 
+    {
+        if (iniFI->stream = _wfopen(filePath, L"rb"))
+        {
+            if (InitGrowingList(&iniFI->sections, DestroyIniSectionU))
+            {
+                WIN32_FILE_ATTRIBUTE_DATA iniFileData;
+                if (GetFileAttributesExW(filePath, GetFileExInfoStandard, &iniFileData))
+                {
+                    ULARGE_INTEGER iniFileSize = { .LowPart = iniFileData.nFileSizeLow, .HighPart = iniFileData.nFileSizeHigh };
+                    unsigned char *text = malloc(iniFileSize.QuadPart);
+                    if (text)
+                    {
+                        fread(text, 1, iniFileSize.QuadPart, iniFI->stream);
+                        bool parseResult = ParseIniText(text, iniFileSize.QuadPart, iniFI);
+                        free(text);
+                        if (parseResult) return iniFI;
+                    }
+                }
+            }
+        }
+        DestroyIniFileInfo(iniFI);
+    }
+    return NULL;
+}
+
+
+static unsigned char ToLower(unsigned char symbol)
 {
     if (symbol >= 65 && symbol <= 90) symbol += 32;
     return symbol;
 }
 
-bool CompareSymbols(byte symbol1, byte symbol2)
+static bool CompareSymbols(unsigned char symbol1, unsigned char symbol2)
 {
     return ToLower(symbol1) == ToLower(symbol2);
 }
 
-//не закончился ли буффер
-#define BUFFER_NOT_FINISHED(ctx) ((ctx)->seek < (ctx)->textLength)
-//буфер закончился?
-#define BUFFER_FINISHED(ctx) ((ctx)->seek >= (ctx)->textLength)
-//сместить указатель на 1
-#define BUFFER_INCREASE_PTR(ctx) (++(ctx)->seek)
-//взять текущий байт
-#define BUFFER_CURRENT_SYMBOL(ctx) ((ctx)->text[(ctx)->seek])
-//САМ ОБЪЕКТ!
-//не закончился ли буффер
-#define BUFFER_NOT_FINISHED_OBJ(ctx) ((ctx).seek < (ctx).textLength)
-//буфер закончился?
-#define BUFFER_FINISHED_OBJ(ctx) ((ctx).seek >= (ctx).textLength)
-//сместить указатель на 1
-#define BUFFER_INCREASE_PTR_OBJ(ctx) (++(ctx).seek)
-//взять текущий байт
-#define BUFFER_CURRENT_SYMBOL_OBJ(ctx) ((ctx).text[(ctx).seek])
+const unsigned char internetShortcutText[] = "InternetShortcut";
+const unsigned char urlText[] = "URL";
 
-const byte internetShortcut[] = "internetshortcut";
-const byte url[] = "url";
+static bool CompareMBtoString(const MemoryBuffer *mb, const unsigned char *str)
+{
+    bool sameSoFar = true;
+    size_t index = 0;
+    bool tempRun = true;
+    while(tempRun)
+    {
+        if
+        (
+            index == mb->length ||
+            str[index] == '\0'
+        )   tempRun = false;
+        else
+        {
+            tempRun = sameSoFar = CompareSymbols(mb->content[index], str[index]);
+            ++index;
+        }
+    }
+    return sameSoFar;
+}
+
+bool CheckSectionCallback(void *section, void *desiredSection)
+{
+    if(
+        CompareMBtoString(
+            &((IniSection *)section)->name, 
+            (const unsigned char *)desiredSection
+        )
+    ) return true;
+    return false;
+}
+
+bool CheckPairKeyCallback(void *pair, void *desiredKey)
+{
+    if(
+        CompareMBtoString(
+            &((IniPair *)pair)->key, 
+            (const unsigned char *)desiredKey
+        )
+    ) return true;
+    return false;
+}
+
+IniSection *GetIniSectionByName(const IniFileInfo *iniFI, const unsigned char* desiredSection)
+{
+    return (IniSection *)SearchGrowingList((void *)&iniFI->sections, CheckSectionCallback, (void *)desiredSection);
+}
+
+IniPair *GetIniPairByKey(const IniSection *section, const unsigned char *desiredKey)
+{
+    return (IniPair *)SearchGrowingList((void *)&section->iniPairs, CheckPairKeyCallback, (void *)desiredKey);
+}
+
+unsigned char *GetIniUrl(const IniFileInfo *iniFI)
+{
+    IniSection *section = GetIniSectionByName(iniFI, internetShortcutText);
+    if (section)
+    {
+        IniPair *pair = GetIniPairByKey(section, urlText);
+        if (pair)
+        {
+            unsigned char *url = malloc(sizeof(char) * (pair->value.length + 1));
+            if (url)
+            {
+                memcpy(url, pair->value.content, pair->value.length);
+                url[pair->value.length] = '\0';
+            }
+            return url;
+        }
+    }
+    return NULL;
+}
+
+
+
+typedef struct
+{
+    const byte *text;
+    const size_t textLength;
+    size_t seek;
+} BufferContext;
+
+#define CR '\r'
+#define LF '\n'
+#define SPACE ' '
+#define INI_PAIR_DIVIDER '='
+#define INI_SECTION_START '['
+#define INI_SECTION_END ']'
+
+static inline bool BfctxUnlessFinished(const BufferContext *bfctx)
+{ return bfctx->seek < bfctx->textLength; }
+static inline bool BfctxIfFinished(const BufferContext *bfctx)
+{ return bfctx->seek >= bfctx->textLength; }
+static inline void BfctxIncreaseSeek(BufferContext *bfctx)
+{ ++bfctx->seek; }
+static inline void BfctxReduceSeek(BufferContext *bfctx)
+{ --bfctx->seek; }
+static inline unsigned char BfctxGetCurrentSymbol(const BufferContext *bfctx)
+{ return bfctx->text[bfctx->seek]; }
+static inline unsigned char BfctxGet(const BufferContext *bfctx, const size_t index)
+{ return bfctx->text[index]; }
+static inline size_t BfctxGetSeek(const BufferContext *bfctx)
+{ return bfctx->seek; }
 
 static bool Condition_StopWhen(const BufferContext *bfctx, const byte symbol)
-{   return BUFFER_CURRENT_SYMBOL(bfctx) != symbol; }
+{   return BfctxGetCurrentSymbol(bfctx) != symbol; }
 
 static bool Condition_ContinueWhile(const BufferContext *bfctx, const byte symbol)
-{   return BUFFER_CURRENT_SYMBOL(bfctx) == symbol; }
+{   return BfctxGetCurrentSymbol(bfctx) == symbol; }
 
-static size_t SkipByCondition(BufferContext *bfctx, bool (*condition)(const BufferContext *, const byte), const byte symbol)
+static size_t SkipByCondition(BufferContext *bfctx, bool (*condition)(const BufferContext *, const byte), const byte symbol, bool back)
 {
     size_t steps = 0;
     while
     (
-        BUFFER_NOT_FINISHED(bfctx) &&   //если буфер закончился, цикл продолжать нельзя
+        BfctxUnlessFinished(bfctx) &&   //если буфер закончился, цикл продолжать нельзя
         condition(bfctx, symbol)
     )
     {
-        BUFFER_INCREASE_PTR(bfctx);
+        if (back) BfctxReduceSeek(bfctx);
+        else BfctxIncreaseSeek(bfctx);
         ++steps;
     }
     return steps;
@@ -61,72 +225,117 @@ static size_t SkipByCondition(BufferContext *bfctx, bool (*condition)(const Buff
 
 static size_t SkipCurrentLine(BufferContext *bfctx)
 {   //в винде в файлах перевод на новую строку состоит из комбинации символов: /r/n – порядок именно такой
-    size_t steps = SkipByCondition(bfctx, Condition_StopWhen, LF);
-    if (BUFFER_FINISHED(bfctx)) return steps;
-    BUFFER_INCREASE_PTR(bfctx);
+    size_t steps = SkipByCondition(bfctx, Condition_StopWhen, LF, false);
+    if (BfctxIfFinished(bfctx)) return steps;
+    BfctxIncreaseSeek(bfctx);
     return ++steps;
 }
 
-static bool CompareBufferToSubstring(BufferContext *bfctx, const byte endOfSubstringInBfctx, const byte *subString, const bool doSkipSpaces)
+static const unsigned char *GetTrimmedStrUntilSymb(BufferContext *bfctx, size_t *length, const char interruptionSymbol)
 {
-    bool sameSoFar = true;
-    size_t substringIndex = 0;
-    bool tempRun = true;
-    while(tempRun)
-    {
-        if (BUFFER_FINISHED(bfctx)) return false;
-        if
-        (
-            BUFFER_CURRENT_SYMBOL(bfctx) == endOfSubstringInBfctx &&
-            subString[substringIndex] == '\0'
-        )   tempRun = false;
-        else tempRun = sameSoFar = CompareSymbols(BUFFER_CURRENT_SYMBOL(bfctx), subString[substringIndex++]);
-        BUFFER_INCREASE_PTR(bfctx);
-        if (doSkipSpaces) SkipByCondition(bfctx, Condition_ContinueWhile, SPACE);
-    }
-    return sameSoFar;
+    SkipByCondition(bfctx, Condition_ContinueWhile, SPACE, false);
+    if (BfctxIfFinished(bfctx) || BfctxGetCurrentSymbol(bfctx) == CR) return NULL;
+    size_t startIndex = BfctxGetSeek(bfctx);
+    *length = SkipByCondition(bfctx, Condition_StopWhen, interruptionSymbol, false);
+    if (BfctxIfFinished(bfctx) || BfctxGetCurrentSymbol(bfctx) == CR || *length == 0) return NULL;
+    BfctxReduceSeek(bfctx);
+    *length -= SkipByCondition(bfctx, Condition_ContinueWhile, SPACE, true);
+    return bfctx->text + startIndex;
 }
 
-byte *ParseIniText(const byte *text, size_t textLength)
+static const unsigned char *GetTrimmedValueText(BufferContext *bfctx, size_t *length)
 {
-    BufferContext bufferCtx = { text, textLength, 0 };
-    bool inTargetSection = false;
-    while (BUFFER_NOT_FINISHED_OBJ(bufferCtx))
+    SkipByCondition(bfctx, Condition_ContinueWhile, SPACE, false);
+    if (BfctxIfFinished(bfctx) || BfctxGetCurrentSymbol(bfctx) == CR) return NULL;
+    size_t startIndex = BfctxGetSeek(bfctx);
+    *length = SkipByCondition(bfctx, Condition_StopWhen, CR, false);
+    BfctxReduceSeek(bfctx);
+    *length -= SkipByCondition(bfctx, Condition_ContinueWhile, SPACE, true);
+    return bfctx->text + startIndex;
+}
+
+static bool ParseIniText(const unsigned char *text, const size_t textLength, IniFileInfo *iniFI)
+{
+    BufferContext bufferContext = { text, textLength, 0 };
+    IniSection *currentSection = NULL;
+    while (BfctxUnlessFinished(&bufferContext))
     {
-        if (BUFFER_CURRENT_SYMBOL_OBJ(bufferCtx) == '[')
+        if (BfctxGetCurrentSymbol(&bufferContext) == INI_SECTION_START)
         {
-            if (inTargetSection) return NULL; //началась новая секция
-            BUFFER_INCREASE_PTR_OBJ(bufferCtx);
-            bool same = CompareBufferToSubstring(&bufferCtx, ']', internetShortcut, false);
-            if (same) inTargetSection = true;
-            SkipCurrentLine(&bufferCtx);
-        }
-        if (BUFFER_FINISHED_OBJ(bufferCtx)) return NULL;
-        if (inTargetSection)
-        {
-            bool same = CompareBufferToSubstring(&bufferCtx, '=', url, true);
-            if (same)
+            BfctxIncreaseSeek(&bufferContext);
+            size_t sectionSize;
+            const unsigned char *trimmedSection = GetTrimmedStrUntilSymb(&bufferContext, &sectionSize, INI_SECTION_END);
+            if (trimmedSection)
             {
-                SkipByCondition(&bufferCtx, Condition_ContinueWhile, SPACE);
-                size_t urlLength = SkipCurrentLine(&bufferCtx); //urlLength содержит длину строки, в которой есть ссылка и /r/n на конце
-                bufferCtx.seek -= urlLength;
-                if (!urlLength) return NULL;
-                byte *result = malloc(--urlLength); //urlLength содержит длинну с переносом на новую строку (CRLF) Нам нужно убрать перенос (-2 байта), но оставить место под \0 (+1 байт)
-                if (result)
+                IniSection *newSection = NewIniSection();
+                if (newSection)
                 {
-                    --urlLength;    //в цикле нам нужно скопировать ссылку, но urlLenth имел на 1 байт больше, чем длинна ссылки. Нам это нужно было, что бы выделить память под длинну ссылки + \0
-                    size_t tempIndex = 0;
-                    while(tempIndex < urlLength)
+                    if (WriteMemoryBuffer(&newSection->name, trimmedSection, sectionSize))
                     {
-                        result[tempIndex++] = BUFFER_CURRENT_SYMBOL_OBJ(bufferCtx);
-                        BUFFER_INCREASE_PTR_OBJ(bufferCtx);
+                        if (InitGrowingList(&newSection->iniPairs, DestroyIniPairU))
+                        {
+                            if (PushGrowingList(&iniFI->sections, newSection))
+                            {
+                                currentSection = newSection;
+                                SkipCurrentLine(&bufferContext);
+                                continue;
+                            }
+                        }
                     }
-                    result[urlLength] = '\0';
+                    DestroyIniSectionU((void *)newSection);
                 }
-                return result;
             }
+            return false;
         }
-        SkipCurrentLine(&bufferCtx);
+        else
+        {
+            if (currentSection)
+            {
+                size_t lengthRe;
+                const unsigned char *keyText = GetTrimmedStrUntilSymb(&bufferContext, &lengthRe, INI_PAIR_DIVIDER);
+                if (keyText)
+                {
+                    IniPair *newPair = NewIniPair();
+                    if (newPair)
+                    {
+                        if (WriteMemoryBuffer(&newPair->key, keyText, lengthRe))
+                        {
+                            SkipByCondition(&bufferContext, Condition_StopWhen, INI_PAIR_DIVIDER, false);
+                            BfctxIncreaseSeek(&bufferContext);
+                            
+                            const unsigned char *valueText = GetTrimmedValueText(&bufferContext, &lengthRe); //предусмотреть что после (=) может быть конец файла, пустая строка или просто пробелы
+                            if (valueText)
+                            {
+                                if (WriteMemoryBuffer(&newPair->value, valueText, lengthRe))
+                                {
+                                    if (PushGrowingList(&currentSection->iniPairs, newPair))
+                                    {
+                                        SkipCurrentLine(&bufferContext);
+                                        continue;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                if (PushGrowingList(&currentSection->iniPairs, newPair))
+                                {
+                                    SkipCurrentLine(&bufferContext);
+                                    continue;
+                                }
+                            } 
+                        }
+                        DestroyIniPairU((void *)newPair);
+                    }
+                }
+                else
+                {
+                    if (BfctxGetCurrentSymbol(&bufferContext) == CR)
+                        SkipCurrentLine(&bufferContext);
+                    continue;
+                }
+            }
+            return false;
+        }
     }
-    return NULL;
+    return true;
 }
