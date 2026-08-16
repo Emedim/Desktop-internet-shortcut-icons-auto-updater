@@ -13,6 +13,8 @@ bool PushGrowingList(GrowingList *gl, void *unit);
 void *GetGrowingList(const GrowingList *gl, size_t index);
 void DestroyGrowingList(GrowingList *gl);
 
-void *SearchGrowingList(GrowingList *gl, bool (*callback)(void *, void *), void *userData);
+void *SearchGrowingList(const GrowingList *gl, bool (*callback)(void *, void *), void *userData);
+
+void DestroyGrowingListIcon(GrowingList *gl);
 
 #endif

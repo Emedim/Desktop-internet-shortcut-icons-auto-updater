@@ -207,7 +207,7 @@ static bool Condition_StopWhen(const BufferContext *bfctx, const byte symbol)
 static bool Condition_ContinueWhile(const BufferContext *bfctx, const byte symbol)
 {   return BfctxGetCurrentSymbol(bfctx) == symbol; }
 
-static size_t SkipByCondition(BufferContext *bfctx, bool (*condition)(const BufferContext *, const byte), const byte symbol, bool back)
+static size_t SkipByCondition(const BufferContext *bfctx, bool (*condition)(const BufferContext *, const byte), const byte symbol, bool back)
 {
     size_t steps = 0;
     while
@@ -223,7 +223,7 @@ static size_t SkipByCondition(BufferContext *bfctx, bool (*condition)(const Buff
     return steps;
 }
 
-static size_t SkipCurrentLine(BufferContext *bfctx)
+static size_t SkipCurrentLine(const BufferContext *bfctx)
 {   //в винде в файлах перевод на новую строку состоит из комбинации символов: /r/n – порядок именно такой
     size_t steps = SkipByCondition(bfctx, Condition_StopWhen, LF, false);
     if (BfctxIfFinished(bfctx)) return steps;
@@ -231,27 +231,70 @@ static size_t SkipCurrentLine(BufferContext *bfctx)
     return ++steps;
 }
 
-static const unsigned char *GetTrimmedStrUntilSymb(BufferContext *bfctx, size_t *length, const char interruptionSymbol)
+size_t GetLengthWithNoStartSpaces(const BufferContext *bfctx, size_t *length, const char interruptionSymbol)
 {
     SkipByCondition(bfctx, Condition_ContinueWhile, SPACE, false);
-    if (BfctxIfFinished(bfctx) || BfctxGetCurrentSymbol(bfctx) == CR) return NULL;
+    if (BfctxIfFinished(bfctx) || BfctxGetCurrentSymbol(bfctx) == CR) return 0; //startIndex изначально не может быть нулём, так как самый первый символ в файле всегда "[" иначе ошибка
     size_t startIndex = BfctxGetSeek(bfctx);
     *length = SkipByCondition(bfctx, Condition_StopWhen, interruptionSymbol, false);
-    if (BfctxIfFinished(bfctx) || BfctxGetCurrentSymbol(bfctx) == CR || *length == 0) return NULL;
+    return startIndex;
+}
+
+void RemoveEndingSpaces(const BufferContext *bfctx, size_t *length)
+{
     BfctxReduceSeek(bfctx);
     *length -= SkipByCondition(bfctx, Condition_ContinueWhile, SPACE, true);
+}
+
+static const unsigned char *GetTrimmedStrUntilSymb(const BufferContext *bfctx, size_t *length, const char interruptionSymbol)
+{
+    size_t startIndex = GetLengthWithNoStartSpaces(bfctx, length, interruptionSymbol);
+    if (!startIndex) return NULL;
+    if (BfctxIfFinished(bfctx) || BfctxGetCurrentSymbol(bfctx) == CR || *length == 0) return NULL;
+    RemoveEndingSpaces(bfctx, length);
     return bfctx->text + startIndex;
 }
 
-static const unsigned char *GetTrimmedValueText(BufferContext *bfctx, size_t *length)
+static const unsigned char *GetTrimmedValueText(const BufferContext *bfctx, size_t *length)
 {
-    SkipByCondition(bfctx, Condition_ContinueWhile, SPACE, false);
-    if (BfctxIfFinished(bfctx) || BfctxGetCurrentSymbol(bfctx) == CR) return NULL;
-    size_t startIndex = BfctxGetSeek(bfctx);
-    *length = SkipByCondition(bfctx, Condition_StopWhen, CR, false);
-    BfctxReduceSeek(bfctx);
-    *length -= SkipByCondition(bfctx, Condition_ContinueWhile, SPACE, true);
+    size_t startIndex = GetLengthWithNoStartSpaces(bfctx, length, CR);
+    if (!startIndex) return NULL;
+    RemoveEndingSpaces(bfctx, length);
     return bfctx->text + startIndex;
+}
+
+bool ParsePairLine(const BufferContext *bfctx, IniPair **pair)
+{
+    size_t lengthRe;
+    const unsigned char *keyText = GetTrimmedStrUntilSymb(bfctx, &lengthRe, INI_PAIR_DIVIDER);
+    if (!keyText)
+    {
+        if (BfctxGetCurrentSymbol(bfctx) == CR)
+            SkipCurrentLine(bfctx);
+        *pair = NULL;
+        return true;
+    }
+
+    *pair = NewIniPair();
+    if (!*pair) return false;
+    if (!WriteMemoryBuffer(&(*pair)->key, keyText, lengthRe))
+    {
+        DestroyIniPairU((void *)(*pair));
+        return false;
+    }
+    SkipByCondition(bfctx , Condition_StopWhen, INI_PAIR_DIVIDER, false);
+    BfctxIncreaseSeek(bfctx);
+    const unsigned char *valueText = GetTrimmedValueText(bfctx, &lengthRe); //предусмотреть что после (=) может быть пустая строка с пробелами или окончание файла
+    if (valueText)
+    {
+        if (!WriteMemoryBuffer(&(*pair)->value, valueText, lengthRe))
+        {
+            DestroyIniPairU((void *)*pair);
+            return false;
+        }
+    }
+    SkipCurrentLine(bfctx);
+    return true;
 }
 
 static bool ParseIniText(const unsigned char *text, const size_t textLength, IniFileInfo *iniFI)
@@ -289,52 +332,18 @@ static bool ParseIniText(const unsigned char *text, const size_t textLength, Ini
         }
         else
         {
-            if (currentSection)
+            if (!currentSection) return false;
+            IniPair *newPair;
+            if (!ParsePairLine(&bufferContext, &newPair)) return false;
+            if (newPair)
             {
-                size_t lengthRe;
-                const unsigned char *keyText = GetTrimmedStrUntilSymb(&bufferContext, &lengthRe, INI_PAIR_DIVIDER);
-                if (keyText)
+                if (!PushGrowingList(&currentSection->iniPairs, newPair))
                 {
-                    IniPair *newPair = NewIniPair();
-                    if (newPair)
-                    {
-                        if (WriteMemoryBuffer(&newPair->key, keyText, lengthRe))
-                        {
-                            SkipByCondition(&bufferContext, Condition_StopWhen, INI_PAIR_DIVIDER, false);
-                            BfctxIncreaseSeek(&bufferContext);
-                            
-                            const unsigned char *valueText = GetTrimmedValueText(&bufferContext, &lengthRe); //предусмотреть что после (=) может быть конец файла, пустая строка или просто пробелы
-                            if (valueText)
-                            {
-                                if (WriteMemoryBuffer(&newPair->value, valueText, lengthRe))
-                                {
-                                    if (PushGrowingList(&currentSection->iniPairs, newPair))
-                                    {
-                                        SkipCurrentLine(&bufferContext);
-                                        continue;
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                if (PushGrowingList(&currentSection->iniPairs, newPair))
-                                {
-                                    SkipCurrentLine(&bufferContext);
-                                    continue;
-                                }
-                            } 
-                        }
-                        DestroyIniPairU((void *)newPair);
-                    }
-                }
-                else
-                {
-                    if (BfctxGetCurrentSymbol(&bufferContext) == CR)
-                        SkipCurrentLine(&bufferContext);
-                    continue;
+                    DestroyIniPairU((void *)newPair);
+                    return false;
                 }
             }
-            return false;
+            continue;
         }
     }
     return true;

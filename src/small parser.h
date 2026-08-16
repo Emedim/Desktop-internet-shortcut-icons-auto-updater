@@ -26,5 +26,6 @@ IniFileInfo *InitIniInfo(const wchar_t *filePath);
 void DestroyIniFileInfo(IniFileInfo *iniFI);
 
 unsigned char *GetIniUrl(const IniFileInfo *iniFI);
+void SetIcnon(IniFileInfo *iniFI, const wchar_t *icoPath);
 
 #endif

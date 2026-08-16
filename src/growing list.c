@@ -48,12 +48,35 @@ void DestroyGrowingList(GrowingList *gl)
     free(gl->data);
 }
 
-void *SearchGrowingList(GrowingList *gl, bool (*callbackChecker)(void *, void *), void *userData)
+void *SearchGrowingList(const GrowingList *gl, bool (*callbackChecker)(void *, void *), void *userData)
 {
     for (size_t index = 0; index < gl->length; ++index)
     {
         void *objPtr = GetGrowingList(gl, index);
         if (callbackChecker(objPtr, userData)) return objPtr;
     }
-    return false;
+    return NULL;
+}
+
+
+#include <windows.h>
+typedef struct
+{
+    wchar_t path[MAX_PATH];
+    wchar_t name[MAX_PATH];
+    bool isBound;
+} IconFileInfo;
+
+void DestroyGrowingListIcon(GrowingList *gl)
+{
+    if (gl->UnitDestroyFunc) 
+    {
+        while(gl->length)
+        {
+            --gl->length;
+            IconFileInfo *ifi = GetGrowingList(gl, gl->length);
+            gl->UnitDestroyFunc(ifi);
+        }
+    }
+    free(gl->data);
 }

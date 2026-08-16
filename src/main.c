@@ -11,27 +11,35 @@
 #include <wchar.h>      //wmemcmp
 #include <errno.h>
 
+//для COM
+#include <objbase.h>
+#include <objidl.h>
+#include <propidl.h>
+#include <intshcut.h>
+
+
 #include "curl/curl.h"
+#include "vips.h"
 
 #include "libxml/HTMLparser.h"
 #include "libxml/xpath.h"
 #include "libxml/uri.h"
 
-#include "vips.h"
-
 #include "cleanup interface.h"
-#include "small parser.h"
 #include "growing list.h"
 #include "memory buffer.h"
 #define STANDARD_ERROR (-1)
-#define MAX_CURRENT_SYSTEM_RESOURCES (12)
+#define MAX_CURRENT_SYSTEM_RESOURCES (13)
 #define INICIAL_BUFFER_LENGTH (12)
 #define BUFFER_ADDITION (8)
+#define URI_MAX_LENGTH (2048)
 
 #define FOLDER_PAGES_L L"pages"
 #define FOLDER_FAVICONS_L L"favicons"
 #define DEFAULT_EXTENTION_OF_FILES_PAGES_L L"html"
 #define TARGET_PAGE_RESPONSE_TYPE "text/html"
+#define UPDATE_ICONS true
+#define RESTORE_DEFAULT_ICONS false
 
 
 typedef enum
@@ -114,12 +122,16 @@ typedef struct
 {
     MemoryBuffer logBuffer;
     MemoryBuffer faviconBuffer;
-    StreamInfo writeStream;     //сюда пишет curlCallback
+    StreamInfo curlCallbackWriteStream;
     unsigned char *url;
     IconFileInfo *boundIcon;
-    IniFileInfo *ini;
     CURL *easy;
     FILE *responseFile;
+
+    IPersistFile  *iPersistFile;
+    IPropertySetStorage *iPropertySetStorage;
+    IPropertyStorage *iPropertyStorage_Intshcut;
+
     wchar_t pageResponseFilePath[MAX_PATH];
     wchar_t faviconResponseFilePath[MAX_PATH];
     wchar_t fileName[MAX_PATH];
@@ -193,11 +205,25 @@ void ResponseFolderInfoDestructor(void *arg);
 void Wrap_vips_shutdown(void *arg);
 void Wrap_g_object_unref(void *arg);
 void Wrap_DestroyGrowingList(void *arg);
+void Wrap_CoUninitialize(void *arg);
+void Wrap_PropVariantClear(void *arg);
+
+void Wrap_FreeIco(IconFileInfo *ifi)
+{
+    free(ifi);
+}
+
+void Wrap_DestroyGrowingListIco(void *arg)
+{
+    GrowingList *gl = arg;
+    DestroyGrowingListIcon(gl);
+}
 
 
 CleanupStack cleanupStack = NULL;
 FILE* logFile = NULL;
 wchar_t appFolder[MAX_PATH];
+wchar_t uriBuffer[URI_MAX_LENGTH];
 
 int main(void)
 {
@@ -243,9 +269,9 @@ int main(void)
     HANDLE searchingFilesHandle;
     wchar_t searchToken[MAX_PATH];
     GrowingList existingIcons;
-    PushCleanupStack(cleanupStack, Wrap_DestroyGrowingList, &existingIcons);        //(4 глобально)
+    PushCleanupStack(cleanupStack, Wrap_DestroyGrowingListIco, &existingIcons);        //(4 глобально)
 
-    if (InitGrowingList(&existingIcons, Wrap_Free))
+    if (InitGrowingList(&existingIcons, Wrap_FreeIco))
     {
         if (SUCCEEDED(StringCchPrintfW(searchToken, MAX_PATH, L"%ls\\resources\\icons\\*.ico", appFolder)))
         {
@@ -362,6 +388,23 @@ int main(void)
         return STANDARD_ERROR;
     }
     PushCleanupStack(cleanupStack, IconsProcessContainerDestructor, &iconsProcessContainer);    // (8 глобально)
+
+    if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)))
+    {
+        FatalError("[ERROR] Не удалось инициализировать COM");
+        return STANDARD_ERROR;
+    }
+    PushCleanupStack(cleanupStack, Wrap_CoUninitialize, NULL);  // (9 глобально)
+    PROPSPEC propspec[2] =
+    {
+        { .ulKind = PRSPEC_PROPID, .propid = PID_IS_ICONFILE  },
+        { .ulKind = PRSPEC_PROPID, .propid = PID_IS_ICONINDEX }
+    };
+    
+    bool programmMode = UPDATE_ICONS;
+
+    if (programmMode == UPDATE_ICONS)           fprintf(logFile, "[DEBUG] Выбран режим скачивания новых иконок и их обновления\n");
+    if (programmMode == RESTORE_DEFAULT_ICONS)  fprintf(logFile, "[DEBUG] Выбран установки дефолтный иконок\n");
     
     size_t DesktopFilesProcessedCorrectly = 0;
     fprintf(logFile, "[DEBUG] Started searching and processing .url files in cycle ...\n");
@@ -414,43 +457,116 @@ int main(void)
         }
         else fprintf(logFile, "[ERROR] Successfuly build responce file path however could not build informative message for app.log. MakeMessage() failed\n");
 
-        currentUnit->ini = InitIniInfo(currentUnit->desktopUrlFilePath);
-        if (!currentUnit->ini)
+        if (FAILED(CoCreateInstance(
+            &CLSID_InternetShortcut,
+            NULL,
+            CLSCTX_INPROC_SERVER,
+            &IID_IPersistFile,
+            (void **)&currentUnit->iPersistFile
+        )))
         {
-            fprintf(logFile, "[ERROR] не удалось прочитать ini-текст из файла на рабочем столе\n");
+            fprintf(logFile, "[ERROR] Не удалось создать COM-объект. CoCreateInstance() failed\n");
             continue;
         }
-        currentUnit->url = GetIniUrl(currentUnit->ini);
-
-        if (!currentUnit->url)
+        if (FAILED(currentUnit->iPersistFile->lpVtbl->Load(
+            currentUnit->iPersistFile, currentUnit->desktopUrlFilePath, STGM_READ)))
         {
-            fprintf(logFile, "[ERROR] не удалось найти url в ini-тексте\n");
+            fprintf(logFile, "[ERROR] Не удалось загрузить internet shortcut в currentUnit->iPersistFile. IPersistFile::Load() failed\n");
             continue;
         }
-        fprintf(logFile, "[DEBUG] Got url: %s\n", currentUnit->url);
-
-        if (!(currentUnit->responseFile = _wfopen(currentUnit->pageResponseFilePath, L"wb")))
-        {
-            fprintf(logFile, "[ERROR] Could not open debug file to process url. _wfopen() failed\n");
-            continue;
-        }
-        currentUnit->writeStream = (StreamInfo){ currentUnit->responseFile, SIWrap_fwrite };
         
-        if (!(currentUnit->easy = curl_easy_init()))
+        if (FAILED(currentUnit->iPersistFile->lpVtbl->QueryInterface(
+            currentUnit->iPersistFile, &IID_IPropertySetStorage, &currentUnit->iPropertySetStorage)))
         {
-            fprintf(logFile, "[ERROR] Could not initialize libcurl easy handle to transfer data by url. curl_easy_init() failed\n");
+            fprintf(logFile, "[ERROR] Не удалось достать интерфейс IPropertySetStorage. IPersistFile::QueryInterface() failed\n");
+            continue;
+        }
+        if (FAILED(currentUnit->iPropertySetStorage->lpVtbl->Open(
+            currentUnit->iPropertySetStorage, &FMTID_Intshcut, STGM_READWRITE, &currentUnit->iPropertyStorage_Intshcut)))
+        {
+            fprintf(logFile, "[ERROR] Не удалось достать интерфейс IPropertyStorage из IPropertySetStorage. IPropertySetStorage::Open() failed\n");
             continue;
         }
 
-        curl_easy_setopt(currentUnit->easy, CURLOPT_URL, currentUnit->url);                 //url по которому обращаться
-        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEFUNCTION, WriteCallback);          //колбек когда приходят данные
-        curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, &currentUnit->writeStream);  //параметр, с которым вызывается колбек
-        curl_easy_setopt(currentUnit->easy, CURLOPT_PRIVATE, currentUnit);                  //ассоциация easy с IconProcessUnit
-        curl_easy_setopt(currentUnit->easy, CURLOPT_TIMEOUT, 15L);                          //Запрос длиться не более 15 секунд
-        curl_easy_setopt(currentUnit->easy, CURLOPT_FOLLOWLOCATION, 1L);                    //Редиректы
-        curl_multi_add_handle(iconsProcessContainer.multi, currentUnit->easy);
+        if (programmMode == UPDATE_ICONS)
+        {
+            IUniformResourceLocatorW *iUniformResourceLocator;
+            if (FAILED(currentUnit->iPersistFile->lpVtbl->QueryInterface(
+                currentUnit->iPersistFile, &IID_IUniformResourceLocatorW, &iUniformResourceLocator)))
+            {
+                fprintf(logFile, "[ERROR] Не удалось достать IUniformResourceLocator из IPersistFile. IPersistFile::QueryInterface() failed\n");
+                continue;
+            }
+            wchar_t *url;
+            if (FAILED(iUniformResourceLocator->lpVtbl->GetURL(iUniformResourceLocator, &url)))
+            {
+                fprintf(logFile, "[ERROR] Не удалось получить url. IUniformResourceLocatorW::GetURL() failed\n");
+                iUniformResourceLocator->lpVtbl->Release(iUniformResourceLocator);
+                continue;
+            }
+            currentUnit->url = WstringToUtf8(url);
+            CoTaskMemFree(url);
+            iUniformResourceLocator->lpVtbl->Release(iUniformResourceLocator);
+            if (!currentUnit->url)
+            {
+                fprintf(logFile, "[ERROR] Не удалось достать конвертировать url в мультибайт. WstringToUtf8() failed\n");
+                continue;
+            }
+            
+            if (!(currentUnit->responseFile = _wfopen(currentUnit->pageResponseFilePath, L"wb")))
+            {
+                fprintf(logFile, "[ERROR] Could not open debug file to process url. _wfopen() failed\n");
+                continue;
+            }
+            currentUnit->curlCallbackWriteStream = (StreamInfo){ currentUnit->responseFile, SIWrap_fwrite };
+            
+            if (!(currentUnit->easy = curl_easy_init()))
+            {
+                fprintf(logFile, "[ERROR] Could not initialize libcurl easy handle to transfer data by url. curl_easy_init() failed\n");
+                continue;
+            }
 
-        IconFileInfo *ifi = SearchGrowingList(&existingIcons, CompareIconFileInfoToIpuName, (void *)fileData.cFileName);
+            curl_easy_setopt(currentUnit->easy, CURLOPT_URL, currentUnit->url);                 //url по которому обращаться
+            curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEFUNCTION, WriteCallback);          //колбек когда приходят данные
+            curl_easy_setopt(currentUnit->easy, CURLOPT_WRITEDATA, &currentUnit->curlCallbackWriteStream);  //параметр, с которым вызывается колбек
+            curl_easy_setopt(currentUnit->easy, CURLOPT_PRIVATE, currentUnit);                  //ассоциация easy с IconProcessUnit
+            curl_easy_setopt(currentUnit->easy, CURLOPT_TIMEOUT, 15L);                          //Запрос длиться не более 15 секунд
+            curl_easy_setopt(currentUnit->easy, CURLOPT_FOLLOWLOCATION, 1L);                    //Редиректы
+            curl_multi_add_handle(iconsProcessContainer.multi, currentUnit->easy);
+        }
+
+        if (programmMode == RESTORE_DEFAULT_ICONS)
+        {
+            PROPVARIANT setIconPathValues[2];
+            PropVariantInit(&setIconPathValues[0]);
+            PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[0]);   //(9 глобально +1 временно ->10)
+            PropVariantInit(&setIconPathValues[1]);
+            PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[1]);   //(9 глобально +2 временно ->11)
+
+            if (FAILED(currentUnit->iPropertyStorage_Intshcut->lpVtbl->WriteMultiple(
+                currentUnit->iPropertyStorage_Intshcut, 2, propspec, setIconPathValues, PID_FIRST_USABLE)))
+            {
+                fprintf(logFile, "[ERROR] Не удалось записать нулевые данные об иконке в property storage. IPropertyStorage::WriteMultiple() failed\n");
+                PartialDeallocation(cleanupStack, 2);   //(11->9)
+                continue;
+            }
+            if (FAILED(currentUnit->iPropertyStorage_Intshcut->lpVtbl->Commit(currentUnit->iPropertyStorage_Intshcut, STGC_DEFAULT)))
+            {
+                fprintf(logFile, "[ERROR] Не удалось сохранить изменения property storage. IPropertyStorage::Commit() failed\n");
+                PartialDeallocation(cleanupStack, 2);   //(11->9)
+                continue;
+            }
+            if (FAILED(currentUnit->iPersistFile->lpVtbl->Save(currentUnit->iPersistFile, currentUnit->desktopUrlFilePath, FALSE)))
+            {
+                fprintf(logFile, "[ERRROR] Не удалось сохранить изменения internet shortcut. IPersistFile::Save() failed\n");
+                PartialDeallocation(cleanupStack, 2);   //(11->9)
+                continue;
+            }
+            fprintf(logFile, "[DEBUG] Icon path и icon index успешно сброшены\n");
+            PartialDeallocation(cleanupStack, 2);       //(11->9)
+        }
+
+        IconFileInfo *ifi = SearchGrowingList(&existingIcons, CompareIconFileInfoToIpuName, (void *)currentUnit->fileName);
         if (ifi)
         {
             currentUnit->boundIcon = ifi;
@@ -470,388 +586,451 @@ int main(void)
     }
     fprintf(logFile, "\n|==================================================================================|\n\n[DEBUG] End of cycle\n");
 
-    if (VIPS_INIT(APP_NAME))    //инициализация libvips
+    if (programmMode == UPDATE_ICONS)
     {
-        FatalError("Could not initialize libvips. VIPS_INIT() failed");
-        return -1;
-    }
-    PushCleanupStack(cleanupStack, Wrap_vips_shutdown, NULL);   // (9 глобально)
-
-    fprintf(logFile, "[DEBUG] Started transfers cycle ...\n");
-    int runningHandles; //склько запросов ещё НЕ завершились
-    size_t pagesResponses = 0, successfulPagesResponses = 0, faviconResponses = 0, successfulFaviconResponses = 0;
-    size_t replacedIcons = 0, deletedIcons = 0, newIcons = 0;
-    do
-    {
-        if(curl_multi_perform(iconsProcessContainer.multi, &runningHandles) != CURLM_OK)
+        if (VIPS_INIT(APP_NAME))    //инициализация libvips
         {
-            FatalError("curl_multi_perform() failed");
+            FatalError("Could not initialize libvips. VIPS_INIT() failed");
             return STANDARD_ERROR;
         }
-        curl_multi_wait(iconsProcessContainer.multi, NULL, 0, 1000, NULL);
+        PushCleanupStack(cleanupStack, Wrap_vips_shutdown, NULL);   // (9 глобально +1 локально ->10)
 
-        CURLMsg *curlMsg;
-        int curlMsgLeft;
-        while ((curlMsg = curl_multi_info_read(iconsProcessContainer.multi, &curlMsgLeft)))
+        fprintf(logFile, "[DEBUG] Started transfers cycle ...\n");
+        int runningHandles; //склько запросов ещё НЕ завершились
+        size_t pagesResponses = 0, successfulPagesResponses = 0, faviconResponses = 0, successfulFaviconResponses = 0;
+        size_t replacedIcons = 0, newIcons = 0;
+        do
         {
-            if (curlMsg->msg == CURLMSG_DONE)
+            if(curl_multi_perform(iconsProcessContainer.multi, &runningHandles) != CURLM_OK)
             {
-                StreamInfo logFileStream = { logFile, SIWrap_fwrite };
-                CURL *easy = curlMsg->easy_handle;  //завершенный easy
-                IconProcessUnit *ipu = NULL;
-                if (curl_easy_getinfo(easy, CURLINFO_PRIVATE, &ipu) != CURLE_OK)
+                FatalError("curl_multi_perform() failed");
+                return STANDARD_ERROR;
+            }
+            curl_multi_wait(iconsProcessContainer.multi, NULL, 0, 1000, NULL);
+
+            CURLMsg *curlMsg;
+            int curlMsgLeft;
+            while ((curlMsg = curl_multi_info_read(iconsProcessContainer.multi, &curlMsgLeft)))
+            {
+                if (curlMsg->msg == CURLMSG_DONE)
                 {
-                    CurlGetinfoFailMessage(&logFileStream, "CURLINFO_PRIVATE");
-                    continue;
-                }
-
-                long responseCode;
-                unsigned char *contentType = NULL;
-                if (ipu->downloadingPage)
-                {
-                    ++pagesResponses;
-                    ipu->downloadingPage = false;
-                    StreamInfo logBufferStream = { &ipu->logBuffer, SIWrap_WriteMemoryBuffer};
-                    
-                    PrintStream
-                    (
-                        &logBufferStream,
-                        "\n|==================================================================================|\n\n[DEBUG] Page transfer finished\n[DEBUG] Exit code:               %s\n[DEBUG] Initial URL:             %s\n", 
-                        curl_easy_strerror(curlMsg->data.result), 
-                        ipu->url
-                    );
-                    unsigned char *lastUrl = NULL;
-                    if (curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &lastUrl) != CURLE_OK)
+                    StreamInfo logFileStream = { logFile, SIWrap_fwrite };
+                    CURL *easy = curlMsg->easy_handle;  //завершенный easy
+                    IconProcessUnit *ipu = NULL;
+                    if (curl_easy_getinfo(easy, CURLINFO_PRIVATE, &ipu) != CURLE_OK)
                     {
-                        FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
-                        CurlGetinfoFailMessage(&logFileStream, "CURLINFO_EFFECTIVE_URL");
+                        CurlGetinfoFailMessage(&logFileStream, "CURLINFO_PRIVATE");
                         continue;
                     }
-                    PrintStream(&logBufferStream, "[DEBUG] last used effective URL: %s\n", lastUrl);
-                    
-                    if (!WriteCurlResponseCode(easy, &logBufferStream, &responseCode))
-                    {
-                        FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
-                        continue;
-                    } 
-                    if (!WriteCurlContentType(easy, &logBufferStream, &contentType))
-                    {                        
-                        FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
-                        continue;
-                    }
-                    
-                    bool ableParseHTML = true;
-                    if (responseCode != 200)
-                    {
-                        PrintStream(&logBufferStream, "[ERROR] Response code is not 200\n");
-                        ableParseHTML = false;
-                    }
-                    if (strncmp(contentType, TARGET_PAGE_RESPONSE_TYPE, strlen(TARGET_PAGE_RESPONSE_TYPE)))
-                    {
-                        PrintStream(&logBufferStream, "[ERROR] Response content type was not recognized as \"%s\"\n", TARGET_PAGE_RESPONSE_TYPE);
-                        ableParseHTML = false;
-                    }
 
-                    if (ableParseHTML)
+                    long responseCode;
+                    unsigned char *contentType = NULL;
+                    if (ipu->downloadingPage)
                     {
-                        fclose(ipu->responseFile);
-                        if (!(ipu->responseFile = _wfopen(ipu->pageResponseFilePath, L"rb")))
-                        {
-                            FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
-                            PrintStream(&logFileStream, "[ERROR] Could not open responce file. _wfopen() failed");
-                            continue;
-                        }
-                        WIN32_FILE_ATTRIBUTE_DATA responceFileData;
-                        if (!GetFileAttributesExW(ipu->pageResponseFilePath, GetFileExInfoStandard, &responceFileData))
-                        {
-                            FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
-                            PrintStream(&logFileStream, "[ERROR] Could not get size of responce file. GetFileAttributesExW() failed\n");
-                            continue;
-                        }
-                        ULARGE_INTEGER responceFileSize = { .LowPart = responceFileData.nFileSizeLow, .HighPart = responceFileData.nFileSizeHigh };
-                        if (responceFileSize.QuadPart > INT_MAX)
-                        {
-                            FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
-                            PrintStream(&logFileStream, "[ERROR] Response size exceeds INT_MAX and can not be processed\n");
-                            continue;
-                        }
-                        unsigned char *buffer = malloc(responceFileSize.QuadPart);
-                        if (!buffer)
-                        {
-                            FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
-                            PrintStream(&logFileStream, "[ERROR] malloc() failed\n");
-                            continue;
-                        }
-                        PushCleanupStack(cleanupStack, Wrap_Free, buffer);     //(9 глобально +1 временно ->10)
-
-                        fread(buffer, 1, responceFileSize.QuadPart, ipu->responseFile);
-                        unsigned char *faviconUrl = GetFaviconUrl(buffer, (int)responceFileSize.QuadPart, lastUrl);
-                        if(!faviconUrl)
-                        {
-                            FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
-                            PrintStream(&logFileStream, "[ERROR] Could not get favicon url. GetFaviconUrl() failed.\n");
-                            SingleDeallocation(cleanupStack);   //(10->9)
-                            continue;
-                        }
-                        PushCleanupStack(cleanupStack, Wrap_Free, faviconUrl);     //(9 глобально +2 временно ->11)
-                        PrintStream(&logBufferStream, "[DEBUG] Favicon url: %s\n", faviconUrl);
+                        ++pagesResponses;
+                        ipu->downloadingPage = false;
+                        StreamInfo logBufferStream = { &ipu->logBuffer, SIWrap_WriteMemoryBuffer};
                         
-                        curl_multi_remove_handle(iconsProcessContainer.multi, easy);
-                        curl_easy_setopt(easy, CURLOPT_URL, faviconUrl); // перенастраиваем
-                        curl_easy_setopt(easy, CURLOPT_TIMEOUT, 8L);
-                        curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 0L);
-                        curl_multi_add_handle(iconsProcessContainer.multi, easy);
-
-                        fclose(ipu->responseFile);
-                        ipu->responseFile = NULL;
-                        ipu->writeStream = (StreamInfo){ &ipu->faviconBuffer, SIWrap_WriteMemoryBuffer};
-
-                        ++successfulPagesResponses;
-                        PrintStream(&logBufferStream, "[DEBUG] Successfuly configured curl easy handle to download favicon\n");
-                        PartialDeallocation(cleanupStack, 2);       //(11->9)
-                    }
-                    else FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
-                }
-                else    //обрабатываем скаченный favicon
-                {
-                    ++faviconResponses;
-                    FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
-                    fprintf(logFile, "\n        -------- Favicon response --------\n\n");
-
-                    if (!WriteCurlResponseCode(easy, &logFileStream, &responseCode)) continue;
-                    if (!WriteCurlContentType(easy, &logFileStream, &contentType)) continue;
-
-                    ImageContentType *imageType;
-                    if 
-                    (
-                        !(imageType = GetExtentionFromContentType(contentType)) ||
-                        FAILED(StringCchPrintfW(ipu->faviconResponseFilePath, MAX_PATH, L"%ls%ls", favicons.path, ipu->fileName)) ||
-                        PathCchRenameExtension(ipu->faviconResponseFilePath, MAX_PATH, imageType->extention) != S_OK
-                    )
-                    {
-                        fprintf(logFile, "[ERROR] Could not build path to file for favicon response. The format may not be supported\n");
-                        continue;
-                    }
-                    LogWstring("[DEBUG] Extention of file for favicon response: %s\n", imageType->extention, "imageType->extention");
-                    LogWstring("[DEBUG] Built path of file for favicon response: \"%s\"\n", ipu->faviconResponseFilePath, "ipu->faviconResponseFilePath");
-
-                    if (!(ipu->responseFile = _wfopen(ipu->faviconResponseFilePath, L"wb")))
-                    {
-                        fprintf(logFile, "[ERROR] Could not open file for favicon response\n");
-                        continue;
-                    }
-                    FlushMemoryBufferToFile(&ipu->faviconBuffer, ipu->responseFile);
-
-                    fprintf(logFile, "[DEBUG] Successfuly download favicon\n");
-                    ++successfulFaviconResponses;
-
-                    
-                    //создать иконку для рабочего стола
-                    fprintf(logFile, "\n        --------   Making icon    --------\n\n");
-
-                    wchar_t *iconFilePathPtr;
-                    if (ipu->boundIcon)
-                    {
-                        ++replacedIcons;
-                        iconFilePathPtr = ipu->boundIcon->path;
-                        fprintf(logFile, "[DEBUG] Уже существующая иконка будет заменена\n");
-                    }
-                    else
-                    {
-                        ++newIcons;
-                        fprintf(logFile, "[DEBUG] Будет собранна новая иконка\n");
-                        wchar_t newIconFilePath[MAX_PATH];
-                        if
+                        PrintStream
                         (
-                            FAILED(StringCchPrintfW(newIconFilePath, MAX_PATH, L"%ls\\resources\\icons\\%ls", appFolder, ipu->fileName)) ||
-                            PathCchRenameExtension(newIconFilePath, MAX_PATH, ICO_W) != S_OK
+                            &logBufferStream,
+                            "\n|==================================================================================|\n\n[DEBUG] Page transfer finished\n[DEBUG] Exit code:               %s\n[DEBUG] Initial URL:             %s\n", 
+                            curl_easy_strerror(curlMsg->data.result), 
+                            ipu->url
+                        );
+                        unsigned char *lastUrl = NULL;
+                        if (curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &lastUrl) != CURLE_OK)
+                        {
+                            FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
+                            CurlGetinfoFailMessage(&logFileStream, "CURLINFO_EFFECTIVE_URL");
+                            continue;
+                        }
+                        PrintStream(&logBufferStream, "[DEBUG] last used effective URL: %s\n", lastUrl);
+                        
+                        if (!WriteCurlResponseCode(easy, &logBufferStream, &responseCode))
+                        {
+                            FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
+                            continue;
+                        } 
+                        if (!WriteCurlContentType(easy, &logBufferStream, &contentType))
+                        {                        
+                            FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
+                            continue;
+                        }
+                        
+                        bool ableParseHTML = true;
+                        if (responseCode != 200)
+                        {
+                            PrintStream(&logBufferStream, "[ERROR] Response code is not 200\n");
+                            ableParseHTML = false;
+                        }
+                        if (strncmp(contentType, TARGET_PAGE_RESPONSE_TYPE, strlen(TARGET_PAGE_RESPONSE_TYPE)))
+                        {
+                            PrintStream(&logBufferStream, "[ERROR] Response content type was not recognized as \"%s\"\n", TARGET_PAGE_RESPONSE_TYPE);
+                            ableParseHTML = false;
+                        }
+
+                        if (ableParseHTML)
+                        {
+                            fclose(ipu->responseFile);
+                            if (!(ipu->responseFile = _wfopen(ipu->pageResponseFilePath, L"rb")))
+                            {
+                                FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
+                                PrintStream(&logFileStream, "[ERROR] Could not open responce file. _wfopen() failed");
+                                continue;
+                            }
+                            WIN32_FILE_ATTRIBUTE_DATA responceFileData;
+                            if (!GetFileAttributesExW(ipu->pageResponseFilePath, GetFileExInfoStandard, &responceFileData))
+                            {
+                                FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
+                                PrintStream(&logFileStream, "[ERROR] Could not get size of responce file. GetFileAttributesExW() failed\n");
+                                continue;
+                            }
+                            ULARGE_INTEGER responceFileSize = { .LowPart = responceFileData.nFileSizeLow, .HighPart = responceFileData.nFileSizeHigh };
+                            if (responceFileSize.QuadPart > INT_MAX)
+                            {
+                                FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
+                                PrintStream(&logFileStream, "[ERROR] Response size exceeds INT_MAX and can not be processed\n");
+                                continue;
+                            }
+                            unsigned char *buffer = malloc(responceFileSize.QuadPart);
+                            if (!buffer)
+                            {
+                                FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
+                                PrintStream(&logFileStream, "[ERROR] malloc() failed\n");
+                                continue;
+                            }
+                            PushCleanupStack(cleanupStack, Wrap_Free, buffer);     //(9 глобально +1 локально +1 временно ->11)
+
+                            fread(buffer, 1, responceFileSize.QuadPart, ipu->responseFile);
+                            unsigned char *faviconUrl = GetFaviconUrl(buffer, (int)responceFileSize.QuadPart, lastUrl);
+                            if(!faviconUrl)
+                            {
+                                FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
+                                PrintStream(&logFileStream, "[ERROR] Could not get favicon url. GetFaviconUrl() failed.\n");
+                                SingleDeallocation(cleanupStack);   //(11->10)
+                                continue;
+                            }
+                            PushCleanupStack(cleanupStack, Wrap_Free, faviconUrl);     //(9 глобально +1 локально +2 временно ->12)
+                            PrintStream(&logBufferStream, "[DEBUG] Favicon url: %s\n", faviconUrl);
+                            
+                            curl_multi_remove_handle(iconsProcessContainer.multi, easy);
+                            curl_easy_setopt(easy, CURLOPT_URL, faviconUrl); // перенастраиваем
+                            curl_easy_setopt(easy, CURLOPT_TIMEOUT, 8L);
+                            curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 0L);
+                            curl_multi_add_handle(iconsProcessContainer.multi, easy);
+
+                            fclose(ipu->responseFile);
+                            ipu->responseFile = NULL;
+                            ipu->curlCallbackWriteStream = (StreamInfo){ &ipu->faviconBuffer, SIWrap_WriteMemoryBuffer};
+
+                            ++successfulPagesResponses;
+                            PrintStream(&logBufferStream, "[DEBUG] Successfuly configured curl easy handle to download favicon\n");
+                            PartialDeallocation(cleanupStack, 2);       //(12->10)
+                        }
+                        else FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
+                    }
+                    else    //обработка скаченного favicon
+                    {
+                        ++faviconResponses;
+                        FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
+                        fprintf(logFile, "\n        -------- Favicon response --------\n\n");
+
+                        if (!WriteCurlResponseCode(easy, &logFileStream, &responseCode)) continue;
+                        if (!WriteCurlContentType(easy, &logFileStream, &contentType)) continue;
+
+                        ImageContentType *imageType;
+                        if 
+                        (
+                            !(imageType = GetExtentionFromContentType(contentType)) ||
+                            FAILED(StringCchPrintfW(ipu->faviconResponseFilePath, MAX_PATH, L"%ls%ls", favicons.path, ipu->fileName)) ||
+                            PathCchRenameExtension(ipu->faviconResponseFilePath, MAX_PATH, imageType->extention) != S_OK
                         )
                         {
-                            fprintf(logFile, "[ERROR] Could not build path to image file\n");
+                            fprintf(logFile, "[ERROR] Could not build path to file for favicon response. The format may not be supported\n");
                             continue;
                         }
-                        iconFilePathPtr = newIconFilePath;
-                        LogWstring("[DEBUG] Built path for new icon: \"%s\"\n", newIconFilePath, "newIconFilePath");
-                    }
+                        LogWstring("[DEBUG] Extention of file for favicon response: %s\n", imageType->extention, "imageType->extention");
+                        LogWstring("[DEBUG] Built path of file for favicon response: \"%s\"\n", ipu->faviconResponseFilePath, "ipu->faviconResponseFilePath");
 
-                    FILE *iconFile = _wfopen(iconFilePathPtr, L"wb");
-                    if (!iconFile)
-                    {
-                        fprintf(logFile, "[ERROR] Could not open icon file. _wfopen() failed\n");
-                        continue;
-                    }
-                    PushCleanupStack(cleanupStack, Wrap_FClose, iconFile);  //(9 глобально +1 локально ->10))
-
-                    if (imageType->type != imgTypeIco)
-                    {
-                        imageBufferInfo iconBuffer;
-                        ICONDIRENTRY iconDirectoryEntry;
-                        iconDirectoryEntry.planes = 1;
-                        iconDirectoryEntry.palette = 0;
-                        iconDirectoryEntry.reserved = 0;
-                        iconDirectoryEntry.offset = sizeof(ICONDIR) + sizeof(ICONDIRENTRY);
-
-                        if (imageType->type != imgTypePng)
+                        if (!(ipu->responseFile = _wfopen(ipu->faviconResponseFilePath, L"wb")))
                         {
-                            VipsImage *image = NULL;
-                            double scale;
-                            if (imageType->type == imgTypeSvg)                                                                          //svg
-                            {
-                                VipsImage *tempSvgImage = NULL;
-                                if (vips_svgload_buffer(ipu->faviconBuffer.content, ipu->faviconBuffer.length, &tempSvgImage, NULL))
-                                {
-                                    fprintf(logFile, "[ERROR] Не удалось загрузить svg-картинку. vips_svgload_buffer() failed\n");
-                                    SingleDeallocation(cleanupStack);   //(10->9)
-                                    continue;
-                                }
-                                int svgWidth = vips_image_get_width(tempSvgImage);
-                                int svgHeight = vips_image_get_height(tempSvgImage);
-                                Wrap_g_object_unref(tempSvgImage);
-                                if (svgWidth != svgHeight)
-                                {
-                                    fprintf(logFile, "[ERROR] svg в не квадратном формате\n");
-                                    SingleDeallocation(cleanupStack);   //(10->9)
-                                    continue;
-                                }
-                                scale = 256.0 / svgWidth;
-                                if (vips_svgload_buffer(ipu->faviconBuffer.content, ipu->faviconBuffer.length, &image, NULL))
-                                {
-                                    fprintf(logFile, "[ERROR] Не удалось загрузить svg-картинку. vips_svgload_buffer() failed\n");
-                                    SingleDeallocation(cleanupStack);   //(10->9)
-                                    continue;
-                                }
-                            }
-                            else        //gif, jpeg, webp, bmp, tiff, avif, apng
-                            {
-                                image = vips_image_new_from_buffer(ipu->faviconBuffer.content, ipu->faviconBuffer.length, "", NULL);
-                                scale = 1;
-                            } 
-                            if (!image)
-                            {
-                                fprintf(logFile, "[ERROR] Could not load image file to build icon. vips_image_new_from_file() failed\n");
-                                SingleDeallocation(cleanupStack);       //(10->9)
-                                continue;
-                            }
-                            PushCleanupStack(cleanupStack, Wrap_g_object_unref, image); //(9 глобально +1 локально +1 временно ->11)
-                            wchar_t pngOutputFilePath[MAX_PATH];
-                            if 
-                            (
-                                FAILED(StringCchPrintfW(pngOutputFilePath, MAX_PATH, L"%ls\\resources\\temp\\%ls", appFolder, ipu->fileName)) ||
-                                PathCchRenameExtension(pngOutputFilePath, MAX_PATH, PNG_W) != S_OK
-                            )
-                            {
-                                fprintf(logFile, "[ERROR] Could not build path to image file\n");
-                                PartialDeallocation(cleanupStack, 2);       //(11->9)
-                                continue;
-                            }
-                            unsigned char *iconOutputFilePathUtf8 = WstringToUtf8(pngOutputFilePath);
-                            if (!iconOutputFilePathUtf8)
-                            {
-                                fprintf(logFile, "[ERROR] Could not convert image path to UTF-8. WstringToUtf8() failed\n");
-                                PartialDeallocation(cleanupStack, 2);       //(11->9)
-                                continue;
-                            }
-                            PushCleanupStack(cleanupStack, Wrap_Free, iconOutputFilePathUtf8); //(9 глобально +1 локально +2 временно ->12)
+                            fprintf(logFile, "[ERROR] Could not open file for favicon response\n");
+                            continue;
+                        }
+                        FlushMemoryBufferToFile(&ipu->faviconBuffer, ipu->responseFile);
 
-                            if (vips_pngsave(image, iconOutputFilePathUtf8, NULL))
-                            {
-                                fprintf(logFile, "[ERROR] Could not save icon to .png file. vips_pngsave() failed\n");
-                                PartialDeallocation(cleanupStack, 3);       //(12->9)
-                                continue;
-                            }
+                        fprintf(logFile, "[DEBUG] Successfuly download favicon\n");
+                        ++successfulFaviconResponses;
 
-                            if (!(iconBuffer.buffer = malloc(sizeof(MemoryBuffer))))
-                            {
-                                fprintf(logFile, "[ERROR] не удалось выделить память для (imageBufferInfo *)(iconBuffer.buffer). malloc() failed");
-                                PartialDeallocation(cleanupStack, 3);       //(12->9)
-                                continue;
-                            }
-                            iconBuffer.isОriginal = true;
-                            if (vips_pngsave_buffer(image, (void **)&iconBuffer.buffer->content, &iconBuffer.buffer->length, NULL) != 0)
-                            {
-                                fprintf(logFile, "[ERROR] Could not save icon to buffer. vips_pngsave_buffer() failed\n");
-                                PartialDeallocation(cleanupStack, 3);       //(12->9)
-                                continue;
-                            }
+                        
+                        //создать иконку для рабочего стола
+                        fprintf(logFile, "\n        --------   Making icon    --------\n\n");
 
-                            uint16_t bpp = BPP_DEFAULT;
-                            switch (image->Bands)
-                            {
-                                case 1: bpp = 8;  break;
-                                case 3: bpp = 24; break;
-                                case 4: bpp = 32; break;
-                            }
-                            iconDirectoryEntry.bpp = bpp;
-                            iconDirectoryEntry.width = image->Xsize == 256 ? 0 : (uint8_t)image->Xsize;
-                            iconDirectoryEntry.height = image->Ysize == 256 ? 0 : (uint8_t)image->Ysize;
-
-                            fprintf(logFile, "[DEBUG] Successfuly saved temporary .png file: \"%s\"\n", iconOutputFilePathUtf8);
-                            PartialDeallocation(cleanupStack, 2);       //(12->10) оставляем локальные ресурсы, если не было ошибки
+                        wchar_t *iconFilePathPtr;
+                        if (ipu->boundIcon)
+                        {
+                            ++replacedIcons;
+                            iconFilePathPtr = ipu->boundIcon->path;
+                            fprintf(logFile, "[DEBUG] Уже существующая иконка будет заменена\n");
                         }
                         else
                         {
-                            iconBuffer = (imageBufferInfo){ &ipu->faviconBuffer, false };
-                            if (iconBuffer.buffer->length < PNG_MIN_LENGTH)
+                            ++newIcons;
+                            fprintf(logFile, "[DEBUG] Будет собранна новая иконка\n");
+                            wchar_t newIconFilePath[MAX_PATH];
+                            if
+                            (
+                                FAILED(StringCchPrintfW(newIconFilePath, MAX_PATH, L"%ls\\resources\\icons\\%ls", appFolder, ipu->fileName)) ||
+                                PathCchRenameExtension(newIconFilePath, MAX_PATH, ICO_W) != S_OK
+                            )
                             {
-                                fprintf(logFile, "[ERROR] Слишком маленький файл");
+                                fprintf(logFile, "[ERROR] Could not build path to image file\n");
                                 continue;
                             }
-                            if (memcmp(iconBuffer.buffer->content, pngSignature, 8) != 0)
-                            {
-                                fprintf(logFile, "[ERROR] Сигнатура не совпала с png форматом");
-                                continue;
-                            }
-                            unsigned char *data = iconBuffer.buffer->content;
-                            uint32_t width  =   ((uint32_t)data[16] << 24)  | ((uint32_t)data[17] << 16)  | ((uint32_t)data[18] << 8) | (uint32_t)data[19]; //первые байты самые "важные" (с 16 до 19)
-                            uint32_t height =   ((uint32_t)data[20] << 24)  | ((uint32_t)data[21] << 16)  | ((uint32_t)data[22] << 8) | (uint32_t)data[23]; //тоже самое (с 20 до 24)
-
-                            uint8_t bit_depth = data[24];     // 8-й байт IHDR
-                            uint16_t bpp = BPP_DEFAULT;
-                            switch (data[25])   // color type
-                            {
-                                case 0:  bpp = bit_depth;       break; // Grayscale
-                                case 2:  bpp = bit_depth * 3;   break; // RGB
-                                case 3:  bpp = bit_depth;       break; // Indexed (palette)
-                                case 4:  bpp = bit_depth * 2;   break; // Grayscale + Alpha
-                                case 6:  bpp = bit_depth * 4;   break; // RGBA
-                            }
-
-                            iconDirectoryEntry.width  = (width == 256) ? 0 : (unsigned char)width;
-                            iconDirectoryEntry.height = (height == 256) ? 0 : (unsigned char)height;
-                            iconDirectoryEntry.bpp    = bpp;   
+                            iconFilePathPtr = newIconFilePath;
+                            LogWstring("[DEBUG] Built path for new icon: \"%s\"\n", newIconFilePath, "newIconFilePath");
                         }
-                        if (iconBuffer.buffer->length > UINT32_MAX)
+
+                        FILE *iconFile = _wfopen(iconFilePathPtr, L"wb");
+                        if (!iconFile)
                         {
-                            fprintf(logFile, "[ERROR] слишком большой размер картинки. Файл не поддерживается\n");
-                            SingleDeallocation(cleanupStack);       //10->9
+                            fprintf(logFile, "[ERROR] Could not open icon file. _wfopen() failed\n");
                             continue;
                         }
-                        iconDirectoryEntry.size = iconBuffer.buffer->length;
+                        PushCleanupStack(cleanupStack, Wrap_FClose, iconFile);  //(9 глобально +1 локально +1 временно ->11))
 
-                        fwrite(&iconHeader, sizeof(iconHeader), 1, iconFile);
-                        fwrite(&iconDirectoryEntry, sizeof(iconDirectoryEntry), 1, iconFile);
-                        fwrite(iconBuffer.buffer->content, 1, iconBuffer.buffer->length, iconFile);
-
-                        if (iconBuffer.isОriginal) 
+                        if (imageType->type != imgTypeIco)
                         {
-                            MemoryBufferDestructor(iconBuffer.buffer);
-                            free(iconBuffer.buffer);
-                        }
-                    }
-                    else fwrite(ipu->faviconBuffer.content, 1, ipu->faviconBuffer.length, iconFile);
+                            imageBufferInfo iconBuffer;
+                            ICONDIRENTRY iconDirectoryEntry;
+                            iconDirectoryEntry.planes = 1;
+                            iconDirectoryEntry.palette = 0;
+                            iconDirectoryEntry.reserved = 0;
+                            iconDirectoryEntry.offset = sizeof(ICONDIR) + sizeof(ICONDIRENTRY);
 
-                    fprintf(logFile, "[DEBUG] Иконка успешно сохранена\n");
-                    
-                    SingleDeallocation(cleanupStack);    // (10->9) сброс локальный ресурсов: файл с иконкой
+                            if (imageType->type != imgTypePng)
+                            {
+                                VipsImage *image = NULL;
+                                double scale;
+                                if (imageType->type == imgTypeSvg)                                                                          //svg
+                                {
+                                    VipsImage *tempSvgImage = NULL;
+                                    if (vips_svgload_buffer(ipu->faviconBuffer.content, ipu->faviconBuffer.length, &tempSvgImage, NULL))
+                                    {
+                                        fprintf(logFile, "[ERROR] Не удалось загрузить svg-картинку. vips_svgload_buffer() failed\n");
+                                        SingleDeallocation(cleanupStack);   //(11->10)
+                                        continue;
+                                    }
+                                    int svgWidth = vips_image_get_width(tempSvgImage);
+                                    int svgHeight = vips_image_get_height(tempSvgImage);
+                                    Wrap_g_object_unref(tempSvgImage);
+                                    if (svgWidth != svgHeight)
+                                    {
+                                        fprintf(logFile, "[ERROR] svg в не квадратном формате\n");
+                                        SingleDeallocation(cleanupStack);   //(11->10)
+                                        continue;
+                                    }
+                                    scale = 256.0 / svgWidth;
+                                    if (vips_svgload_buffer(ipu->faviconBuffer.content, ipu->faviconBuffer.length, &image, NULL))
+                                    {
+                                        fprintf(logFile, "[ERROR] Не удалось загрузить svg-картинку. vips_svgload_buffer() failed\n");
+                                        SingleDeallocation(cleanupStack);   //(11->10)
+                                        continue;
+                                    }
+                                }
+                                else        //gif, jpeg, webp, bmp, tiff, avif, apng
+                                {
+                                    image = vips_image_new_from_buffer(ipu->faviconBuffer.content, ipu->faviconBuffer.length, "", NULL);
+                                    scale = 1;
+                                } 
+                                if (!image)
+                                {
+                                    fprintf(logFile, "[ERROR] Could not load image file to build icon. vips_image_new_from_file() failed\n");
+                                    SingleDeallocation(cleanupStack);       //(11->10)
+                                    continue;
+                                }
+                                PushCleanupStack(cleanupStack, Wrap_g_object_unref, image); //(9 глобально +1 локально +2 временно ->12))
+                                wchar_t pngOutputFilePath[MAX_PATH];
+                                if 
+                                (
+                                    FAILED(StringCchPrintfW(pngOutputFilePath, MAX_PATH, L"%ls\\resources\\temp\\%ls", appFolder, ipu->fileName)) ||
+                                    PathCchRenameExtension(pngOutputFilePath, MAX_PATH, PNG_W) != S_OK
+                                )
+                                {
+                                    fprintf(logFile, "[ERROR] Could not build path to image file\n");
+                                    PartialDeallocation(cleanupStack, 2);       //(12->10)
+                                    continue;
+                                }
+                                unsigned char *iconOutputFilePathUtf8 = WstringToUtf8(pngOutputFilePath);
+                                if (!iconOutputFilePathUtf8)
+                                {
+                                    fprintf(logFile, "[ERROR] Could not convert image path to UTF-8. WstringToUtf8() failed\n");
+                                    PartialDeallocation(cleanupStack, 2);       //(12->10)
+                                    continue;
+                                }
+                                PushCleanupStack(cleanupStack, Wrap_Free, iconOutputFilePathUtf8); //(9 глобально +1 локально +3 временно ->13)
+
+                                if (vips_pngsave(image, iconOutputFilePathUtf8, NULL))
+                                {
+                                    fprintf(logFile, "[ERROR] Could not save icon to .png file. vips_pngsave() failed\n");
+                                    PartialDeallocation(cleanupStack, 3);       //(13->10)
+                                    continue;
+                                }
+
+                                if (!(iconBuffer.buffer = malloc(sizeof(MemoryBuffer))))
+                                {
+                                    fprintf(logFile, "[ERROR] не удалось выделить память для (imageBufferInfo *)(iconBuffer.buffer). malloc() failed");
+                                    PartialDeallocation(cleanupStack, 3);       //(13->10)
+                                    continue;
+                                }
+                                iconBuffer.isОriginal = true;
+                                if (vips_pngsave_buffer(image, (void **)&iconBuffer.buffer->content, &iconBuffer.buffer->length, NULL) != 0)
+                                {
+                                    fprintf(logFile, "[ERROR] Could not save icon to buffer. vips_pngsave_buffer() failed\n");
+                                    PartialDeallocation(cleanupStack, 3);       //(13->10)
+                                    continue;
+                                }
+
+                                uint16_t bpp = BPP_DEFAULT;
+                                switch (image->Bands)
+                                {
+                                    case 1: bpp = 8;  break;
+                                    case 3: bpp = 24; break;
+                                    case 4: bpp = 32; break;
+                                }
+                                iconDirectoryEntry.bpp = bpp;
+                                iconDirectoryEntry.width = image->Xsize == 256 ? 0 : (uint8_t)image->Xsize;
+                                iconDirectoryEntry.height = image->Ysize == 256 ? 0 : (uint8_t)image->Ysize;
+
+                                fprintf(logFile, "[DEBUG] Successfuly saved temporary .png file: \"%s\"\n", iconOutputFilePathUtf8);
+                                PartialDeallocation(cleanupStack, 2);       //(13->11) оставляем открытый (FILE *)iconFile
+                            }
+                            else
+                            {
+                                iconBuffer = (imageBufferInfo){ &ipu->faviconBuffer, false };
+                                if (iconBuffer.buffer->length < PNG_MIN_LENGTH)
+                                {
+                                    fprintf(logFile, "[ERROR] Слишком маленький файл");
+                                    continue;
+                                }
+                                if (memcmp(iconBuffer.buffer->content, pngSignature, 8) != 0)
+                                {
+                                    fprintf(logFile, "[ERROR] Сигнатура не совпала с png форматом");
+                                    continue;
+                                }
+                                unsigned char *data = iconBuffer.buffer->content;
+                                uint32_t width  =   ((uint32_t)data[16] << 24)  | ((uint32_t)data[17] << 16)  | ((uint32_t)data[18] << 8) | (uint32_t)data[19]; //первые байты самые "важные" (с 16 до 19)
+                                uint32_t height =   ((uint32_t)data[20] << 24)  | ((uint32_t)data[21] << 16)  | ((uint32_t)data[22] << 8) | (uint32_t)data[23]; //тоже самое (с 20 до 24)
+
+                                uint8_t bit_depth = data[24];     // 8-й байт IHDR
+                                uint16_t bpp = BPP_DEFAULT;
+                                switch (data[25])   // color type
+                                {
+                                    case 0:  bpp = bit_depth;       break; // Grayscale
+                                    case 2:  bpp = bit_depth * 3;   break; // RGB
+                                    case 3:  bpp = bit_depth;       break; // Indexed (palette)
+                                    case 4:  bpp = bit_depth * 2;   break; // Grayscale + Alpha
+                                    case 6:  bpp = bit_depth * 4;   break; // RGBA
+                                }
+
+                                iconDirectoryEntry.width  = (width == 256) ? 0 : (unsigned char)width;
+                                iconDirectoryEntry.height = (height == 256) ? 0 : (unsigned char)height;
+                                iconDirectoryEntry.bpp    = bpp;   
+                            }
+                            if (iconBuffer.buffer->length > UINT32_MAX)
+                            {
+                                fprintf(logFile, "[ERROR] слишком большой размер картинки. Файл не поддерживается\n");
+                                SingleDeallocation(cleanupStack);       //11->10
+                                continue;
+                            }
+                            iconDirectoryEntry.size = iconBuffer.buffer->length;
+
+                            fwrite(&iconHeader, sizeof(iconHeader), 1, iconFile);
+                            fwrite(&iconDirectoryEntry, sizeof(iconDirectoryEntry), 1, iconFile);
+                            fwrite(iconBuffer.buffer->content, 1, iconBuffer.buffer->length, iconFile);
+
+                            if (iconBuffer.isОriginal) 
+                            {
+                                MemoryBufferDestructor(iconBuffer.buffer);
+                                free(iconBuffer.buffer);
+                            }
+                        }
+                        else fwrite(ipu->faviconBuffer.content, 1, ipu->faviconBuffer.length, iconFile);
+
+                        fprintf(logFile, "[DEBUG] Иконка успешно сохранена\n");
+                        SingleDeallocation(cleanupStack);    // (11->10) закрываем (FILE *)iconFile
+
+                        //сохранить скаченную иконку в COM-объект и на рабочий стол
+                        uint32_t uriLength = ARRAYSIZE(uriBuffer);
+                        if (FAILED(UrlCreateFromPathW(iconFilePathPtr, uriBuffer, &uriLength, 0)))
+                        {
+                            fprintf(logFile, "[ERROR] Не удалось собрать uri для настройки иконки в COM-объекте. UrlCreateFromPathW() failed\n");
+                            continue;
+                        }
+
+                        PROPVARIANT setIconPathValues[2];
+                        PropVariantInit(&setIconPathValues[0]);
+                        PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[0]);   //(9 глобально +1 локально +1 временно ->11)
+                        setIconPathValues[0].vt = VT_LPWSTR;
+                        setIconPathValues[0].pwszVal = CoTaskMemAlloc((uriLength + 1) * sizeof(wchar_t));
+                        if (!setIconPathValues[0].pwszVal)
+                        {
+                            fprintf(logFile, "[ERRPR] Не удалось выделить память из COM-кучи для uri строки. CoTaskMemAlloc() failed\n");
+                            SingleDeallocation(cleanupStack);   //(11->10)
+                            continue;
+                        }
+                        memcpy(setIconPathValues[0].pwszVal, uriBuffer, uriLength * sizeof(wchar_t));
+                        setIconPathValues[0].pwszVal[uriLength] = L'\0';
+
+                        PropVariantInit(&setIconPathValues[1]);
+                        PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[1]);   //(9 глобально +1 локально +2 временно ->12)
+                        setIconPathValues[1].vt = VT_I4;
+                        setIconPathValues[1].lVal = 0;
+
+                        if (FAILED(ipu->iPropertyStorage_Intshcut->lpVtbl->WriteMultiple(
+                            ipu->iPropertyStorage_Intshcut, 2, propspec, setIconPathValues, PID_FIRST_USABLE)))
+                        {
+                            fprintf(logFile, "[ERROR] Не удалось записать данные о новой иконке в property storage. IPropertyStorage::WriteMultiple() failed\n");
+                            PartialDeallocation(cleanupStack, 2);   //(12->10)
+                            continue;
+                        }
+                        if (FAILED(ipu->iPropertyStorage_Intshcut->lpVtbl->Commit(ipu->iPropertyStorage_Intshcut, STGC_DEFAULT)))
+                        {
+                            fprintf(logFile, "[ERROR] Не удалось сохранить изменения property storage. IPropertyStorage::Commit() failed\n");
+                            PartialDeallocation(cleanupStack, 2);   //(12->10)
+                            continue;
+                        }
+                        if (FAILED(ipu->iPersistFile->lpVtbl->Save(ipu->iPersistFile, ipu->desktopUrlFilePath, FALSE)))
+                        {
+                            fprintf(logFile, "[ERRROR] Не удалось сохранить изменения internet shortcut. IPersistFile::Save() failed\n");
+                            PartialDeallocation(cleanupStack, 2);   //(12->10)
+                            continue;
+                        }
+                        
+                        PartialDeallocation(cleanupStack, 2);       //(12->10)
+                    }
                 }
             }
         }
+        while (runningHandles);
+        
+        if (pages.folderNameUtf8) fprintf(logFile, "[INFO] \"%s\" responses: %zd\n[INFO] Successful \"%s\" responses: %zd\n", pages.folderNameUtf8, pagesResponses, pages.folderNameUtf8, successfulPagesResponses);
+        else fprintf(logFile, "[ERROR] Unknown responces: %zd\n[ERROR]Successful unknown responses: %zd\n", pagesResponses, successfulPagesResponses);
+        if (favicons.folderNameUtf8) fprintf(logFile, "[INFO] \"%s\" responses: %zd\n[INFO] Successful \"%s\" responses: %zd\n", favicons.folderNameUtf8, faviconResponses, favicons.folderNameUtf8, successfulFaviconResponses);
+        else fprintf(logFile, "[ERROR] Unknown responces: %zd\n[ERROR] Successful unknown responces: %zd\n", faviconResponses, successfulFaviconResponses);
+
+        fprintf(logFile, "[DEBUG] New icon files: %zu\n", newIcons);
+        fprintf(logFile, "[DEBUG] Replaced icon files: %zu\n", replacedIcons);
+
+        SingleDeallocation(cleanupStack);    //(10->9)
     }
-    while (runningHandles);
+
     fprintf(logFile, "\n|==================================================================================|\n\n[DEBUG] transfers cycle finished\n");
 
     fprintf(logFile, "[DEBUG] Deleting redundant icons ...\n");
     bool deletedAnyFiles = false;
+    size_t deletedIcons = 0;
     for (size_t i = 0; i < existingIcons.length; ++i)
     {
         IconFileInfo *ifi = GetGrowingList(&existingIcons, i);
@@ -872,18 +1051,9 @@ int main(void)
 
     fprintf(logFile, "[INFO] Found files: %zd\n", iconsProcessContainer.iconProcessUnits.length);
     fprintf(logFile, "[INFO] Processed files correctly: %zd\n", DesktopFilesProcessedCorrectly);
-
-    if (pages.folderNameUtf8) fprintf(logFile, "[INFO] \"%s\" responses: %zd\n[INFO] Successful \"%s\" responses: %zd\n", pages.folderNameUtf8, pagesResponses, pages.folderNameUtf8, successfulPagesResponses);
-    else fprintf(logFile, "[ERROR] Unknown responces: %zd\n[ERROR]Successful unknown responses: %zd\n", pagesResponses, successfulPagesResponses);
-    if (favicons.folderNameUtf8) fprintf(logFile, "[INFO] \"%s\" responses: %zd\n[INFO] Successful \"%s\" responses: %zd\n", favicons.folderNameUtf8, faviconResponses, favicons.folderNameUtf8, successfulFaviconResponses);
-    else fprintf(logFile, "[ERROR] Unknown responces: %zd\n[ERROR] Successful unknown responces: %zd\n", faviconResponses, successfulFaviconResponses);
-
-    fprintf(logFile, "[DEBUG] New icon files: %zu\n", newIcons);
-    fprintf(logFile, "[DEBUG] Replaced icon files: %zu\n", replacedIcons);
     fprintf(logFile, "[DEBUG] Deleted icon files: %zu\n", deletedIcons);
     
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
-    fflush(logFile);
     CompleteDeallocation(cleanupStack);
     return 0;
 }
@@ -1130,6 +1300,7 @@ bool CompareIconFileInfoToIpuName(void *ifiVoidPtr, void *desiredNameVoidPtr)
         lenUrl == lenIco &&
         wmemcmp(desiredName, ifi->name, lenUrl) == 0
     ) return true;
+    return false;
 }
 
 static void FatalError(const unsigned char *message)
@@ -1167,8 +1338,10 @@ void IconsProcessContainerDestructor(void *arg)
     for (size_t i; i < container->iconProcessUnits.length; ++i)
     {
         IconProcessUnit *unit = GetGrowingList(&container->iconProcessUnits, i);
-        if (unit->ini) DestroyIniFileInfo(unit->ini);
         free(unit->url);
+        if (unit->iPropertyStorage_Intshcut) unit->iPropertyStorage_Intshcut->lpVtbl->Release(unit->iPropertyStorage_Intshcut);
+        if (unit->iPropertySetStorage) unit->iPropertySetStorage->lpVtbl->Release(unit->iPropertySetStorage);
+        if (unit->iPersistFile) unit->iPersistFile->lpVtbl->Release(unit->iPersistFile);
         MemoryBufferDestructor(&unit->logBuffer);
         MemoryBufferDestructor(&unit->faviconBuffer);
         if (unit->responseFile) fclose(unit->responseFile);
@@ -1211,6 +1384,16 @@ void Wrap_g_object_unref(void *arg)
 void Wrap_DestroyGrowingList(void *arg)
 {
     DestroyGrowingList((GrowingList *)arg);
+}
+
+void Wrap_CoUninitialize(void *arg)
+{
+    CoUninitialize();
+}
+
+void Wrap_PropVariantClear(void *arg)
+{
+    PropVariantClear((PROPVARIANT *)arg);
 }
 
 

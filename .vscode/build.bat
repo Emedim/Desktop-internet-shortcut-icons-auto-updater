@@ -36,7 +36,8 @@ cl src\main.c ^
    Shell32.lib ^
    Pathcch.lib ^
    Ole32.lib ^
-   Shlwapi.lib
+   Shlwapi.lib ^
+   Uuid.lib
 
 rem /Zi     – включает отладочную информацию
 rem /Od     – выключает оптимизации
