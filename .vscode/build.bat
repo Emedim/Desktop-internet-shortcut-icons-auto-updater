@@ -5,9 +5,9 @@ set "VCPKG=C:\non-system_programs\vcpkg\installed\x64-windows"
 set "LIBVIPS=C:\non-system_programs\dev_libraries\vips-dev-8.18"
 cl src\main.c ^
    "src\cleanup interface.c" ^
-   "src\small parser.c" ^
    "src\growing list.c" ^
    "src\memory buffer.c" ^
+   "src\path info.c" ^
    /I"%VCPKG%\include" ^
    /I"%VCPKG%\include\libxml2" ^
    /I"%LIBVIPS%\include" ^

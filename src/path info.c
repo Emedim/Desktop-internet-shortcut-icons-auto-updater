@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <stdbool.h>
 #include "path info.h"
 
 typedef struct tag_PathInfo
@@ -8,17 +9,27 @@ typedef struct tag_PathInfo
     unsigned char *utf8;
 } PathInfo;
 
-PathInfo *GetPathInfo(void (*PathDestructor)(wchar_t *))
+PathInfo *GetPathInfo(wchar_t *mainPath, void (*PathDestructor)(wchar_t *))
 {
+    if (!mainPath) return NULL;
     PathInfo *pi = malloc(sizeof(PathInfo));
-    if (pi) *pi = (PathInfo){ .destroyMainStr = PathDestructor};
+    if (pi) *pi = (PathInfo){ mainPath, PathDestructor, NULL };
+    else if (PathDestructor) PathDestructor(mainPath);
     return pi;
+}
+
+PathInfo *GetDefaultPathInfo()
+{
+    return GetPathInfo(malloc(sizeof(wchar_t) * MAX_PATH), Wrap_Free);
 }
 
 wchar_t *GetChangeableUtf16Path(PathInfo *pi)
 {
-    free(pi->utf8);
-    pi->utf8 = NULL;
+    return pi->utf16;
+}
+
+const wchar_t *GetUtf16Path(PathInfo *pi)
+{
     return pi->utf16;
 }
 
@@ -26,6 +37,11 @@ const unsigned char *GetUtf8Path(PathInfo *pi)
 {
     if (!pi->utf8) pi->utf8 = WstringToUtf8(pi->utf16);
     return pi->utf8;
+}
+
+const unsigned char *GetUtf8PathMessage(PathInfo *pi)
+{
+    return AvoidNull(GetUtf8Path(pi), STANDARD_ERROR_MESSAGE_OF_CONVERTING_WCHAR_TO_UTF8);
 }
 
 void *DestroyPathInfo(PathInfo *pi)
@@ -54,4 +70,9 @@ unsigned char *WstringToUtf8(const wchar_t *wstr)
 const unsigned char *AvoidNull(const char *msg, const char *errorMessage)
 {
     return msg ? msg : errorMessage;
+}
+
+void Wrap_Free(void *arg)
+{
+    free(arg);
 }
