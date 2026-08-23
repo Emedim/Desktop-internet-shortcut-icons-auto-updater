@@ -18,9 +18,9 @@ cl src\main.c ^
    /Zi ^
    /Od ^
    /W4 ^
-   /Fe:bin\app.exe ^
+   /Fe:bin\DISIAU.exe ^
    /Fo:build\ ^
-   /Fd:build\app.pdb ^
+   /Fd:build\DISIAU.pdb ^
    /link ^
    /LIBPATH:"%VCPKG%\lib" ^
    libxml2.lib ^
@@ -30,7 +30,7 @@ cl src\main.c ^
    libglib-2.0.lib ^
    libgobject-2.0.lib ^
    libgio-2.0.lib ^
-   /PDB:build\app_link.pdb ^
+   /PDB:build\DISIAU_link.pdb ^
    /INCREMENTAL:NO^
    user32.lib ^
    Shell32.lib ^

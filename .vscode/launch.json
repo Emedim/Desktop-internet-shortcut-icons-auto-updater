@@ -6,7 +6,7 @@
       "type": "cppvsdbg",
       "request": "launch",
 
-      "program": "${workspaceFolder}\\bin\\app.exe",
+      "program": "${workspaceFolder}\\bin\\DISIAU.exe",
       "cwd": "${workspaceFolder}\\bin",  //рабочая директория процесса
 
       "args": [],             // параметры главной функции отлаживаемой программы

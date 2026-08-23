@@ -1,6 +1,6 @@
 build/*
 logs/*
 debug/*
-help/*
 response/*
 resources/*
+bin/*
