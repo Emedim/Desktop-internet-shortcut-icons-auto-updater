@@ -1,4 +1,4 @@
-#define APP_NAME "Desktop icons auto updater"
+#define APP_NAME "Desktop internet shortcut icons auto updater"
 
 #include <windows.h>
 #include <shlobj.h> //SHGetKnownFolderPath();
@@ -10,6 +10,7 @@
 #include <shlwapi.h>    //PathFindExtensionW()
 #include <wchar.h>      //wmemcmp
 #include <errno.h>
+#include <sys/stat.h>   //struct stat; stat()
 
 //для COM
 #include <objbase.h>
@@ -30,13 +31,23 @@
 #include "memory buffer.h"
 #include "path info.h"
 #define STANDARD_ERROR (-1)
-#define MAX_CURRENT_SYSTEM_RESOURCES (18)
+#define MAX_CURRENT_SYSTEM_RESOURCES (23)
 #define INICIAL_BUFFER_LENGTH (12)
 #define BUFFER_ADDITION (8)
 #define URI_MAX_LENGTH (2048)
 
+#define FOLDER_LOGS_L L"logs"
+
+#define FOLDER_RESPONSE_L L"response"
+#define FOLDER_RESPONSE "response"
 #define FOLDER_PAGES_L L"pages"
 #define FOLDER_FAVICONS_L L"favicons"
+
+#define FOLDER_RESOURCES_L L"resources"
+#define FOLDER_RESOURCES "resources"
+#define FOLDER_ICONS_L L"icons"
+#define FOLDER_TEMP_L L"temp"
+
 #define DEFAULT_EXTENTION_OF_FILES_PAGES_L L"html"
 #define TARGET_PAGE_RESPONSE_TYPE "text/html"
 #define CHOICE_UPDATE_ICONS '1'
@@ -69,10 +80,10 @@ typedef struct
 typedef struct
 {
     ImageContentType contentType;
-    unsigned char *faviconContentType;
+    char *faviconContentType;
 } ContentTypesMatchingUnit;
 
-#define CONTENT_TYPES_QUAINITY 14
+#define CONTENT_TYPES_QUAINITY (14)
 typedef struct
 {
     ContentTypesMatchingUnit array[CONTENT_TYPES_QUAINITY];
@@ -105,7 +116,7 @@ const ContentTypesMatchingContainer contentTypes =
 typedef enum
 {
     DM_PageDefault,
-    DM_PageRetry,
+    //DM_PageRetry,
     DM_Favicon
 } DownloadingMode;
 
@@ -125,7 +136,7 @@ typedef struct
 typedef struct
 {
     void *stream;
-    bool (*write)(void *, const unsigned char *, size_t);
+    bool (*write)(void *, const char *, size_t);
 } StreamInfo;
 
 typedef struct
@@ -133,7 +144,7 @@ typedef struct
     MemoryBuffer logBuffer;
     MemoryBuffer faviconBuffer;
     StreamInfo curlCallbackWriteStream;
-    unsigned char *url;
+    char *url;
     IconFileInfo *boundIcon;
     CURL *easy;
     FILE *responseFile;
@@ -184,23 +195,23 @@ typedef struct {
 } ICONDIRENTRY;
 #pragma pack(pop)   //восстанавливает выравнивание
 const ICONDIR iconHeader = {0, 1, 1};
-const unsigned char pngSignature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+const char pngSignature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
 
 
 size_t WriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata);
-static void FatalError(const unsigned char *message);
-void CurlGetinfoFailMessage(StreamInfo *streamInfo, const unsigned char *type);
-unsigned char *GetFaviconUrl(const unsigned char *buffer, int size, const unsigned char *base_url);
+static void FatalError(const char *message);
+void CurlGetinfoFailMessage(StreamInfo *streamInfo, const char *type);
+char *GetFaviconUrl(const char *buffer, int size, const char *base_url);
 bool DropDirectory(const wchar_t *directory);
-int vMakeMessage(unsigned char **buffer, const unsigned char *format, va_list ap);
-int MakeMessage(unsigned char **buffer, const unsigned char *format, ...);
-int PrintStream(StreamInfo *info, const unsigned char *format, ...);
+int vMakeMessage(char **buffer, const char *format, va_list ap);
+int MakeMessage(char **buffer, const char *format, ...);
+int PrintStream(StreamInfo *info, const char *format, ...);
 bool WriteCurlResponseCode(CURL *easy, StreamInfo *stream, long *responseCode);
-bool WriteCurlContentType(CURL *easy, StreamInfo *stream, unsigned char **contentType);
-bool WriteStream(StreamInfo *info, const unsigned char *data, size_t dataLength);
-bool SIWrap_fwrite(void *streamInfo, const unsigned char *data, size_t dataLength);
-bool SIWrap_WriteMemoryBuffer(void *memoryBuffer, const unsigned char *data, size_t dataLength);
-const ImageContentType *GetExtentionFromContentType(const unsigned char *contentType);
+bool WriteCurlContentType(CURL *easy, StreamInfo *stream, char **contentType);
+bool WriteStream(StreamInfo *info, const char *data, size_t dataLength);
+bool SIWrap_fwrite(void *streamInfo, const char *data, size_t dataLength);
+bool SIWrap_WriteMemoryBuffer(void *memoryBuffer, const char *data, size_t dataLength);
+const ImageContentType *GetExtentionFromContentType(const char *contentType);
 bool CompareIconFileInfoToIpuName(void *ifi, void *ipu);
 
 void Wrap_FindClose(void *arg);
@@ -244,83 +255,163 @@ int main(void)
         return STANDARD_ERROR;
     }
 
-    PathInfo *logPath = GetDefaultPathInfo();
-    if (!logPath)
+    PathInfo *logsFolderName = GetPathInfo(FOLDER_LOGS_L, NULL);
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, logsFolderName);    //(2 глобально)
+    PathInfo *logsFolder = GetDefaultPathInfo();
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, logsFolder);          //(3 глобально)
+    if (!logsFolderName || !logsFolder)
+    {
+        FatalError("Could not initialize (PathInfo *) for folder for log file. GetPathInfo() or GetDefaultPathInfo() failed.\n");
+        return STANDARD_ERROR;
+    }
+    if (FAILED(StringCchPrintfW(GetChangeableUtf16Path(logsFolder), MAX_PATH, L"%ls\\%ls\\", GetUtf16Path(appFolder), GetUtf16Path(logsFolderName))))
+    {
+        char *errorMessage = NULL;
+        MakeMessage(&errorMessage, "Could not build \"%s\" path for log file", GetUtf8PathMessage(logsFolderName));
+        FatalError(errorMessage);
+        free(errorMessage);
+        return STANDARD_ERROR;
+    }
+    int creatingFoldersResult = SHCreateDirectoryExW(NULL, GetUtf16Path(logsFolder), NULL);
+    if (creatingFoldersResult != ERROR_SUCCESS && creatingFoldersResult != ERROR_ALREADY_EXISTS)
+    {
+        char *errorMessage = NULL;
+        MakeMessage(&errorMessage, "Could not create \"%s\" folder.", GetUtf8PathMessage(logsFolderName));
+        FatalError(errorMessage);
+        free(errorMessage);
+        return STANDARD_ERROR;
+    }
+    PathInfo *logFilePath = GetDefaultPathInfo();
+    if (!logFilePath)
     {
         FatalError("Could not initialize (PathInfo *) for path to log file. GetDefaultPathInfo() failed.\n");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, logPath); //(2 глобально)
-    if (FAILED(StringCchPrintfW(GetChangeableUtf16Path(logPath), MAX_PATH, L"%ls\\logs\\app.log", GetUtf16Path(appFolder))))
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, logFilePath); //(4 глобально)
+    if (FAILED(StringCchPrintfW(GetChangeableUtf16Path(logFilePath), MAX_PATH, L"%lsapp.log", GetUtf16Path(logsFolder))))
     {
         FatalError("Could not build path to app.log file. StringCchPrintfW() failed.");
         return STANDARD_ERROR;
     }
-    if (!(logFile = _wfopen(GetUtf16Path(logPath), L"wb")))
+    if (!(logFile = _wfopen(GetUtf16Path(logFilePath), L"wb")))
     {
         FatalError("Could not open app.log file.");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Wrap_FClose, logFile);      // (3 глобально)
+    PushCleanupStack(cleanupStack, Wrap_FClose, logFile);      // (5 глобально)
     
+    fprintf(logFile, "[DEBUG] Built folder path \"%s\": \"%s\".\n", GetUtf8PathMessage(logsFolderName), GetUtf8PathMessage(logsFolder));
+    fprintf(logFile, "[DEBUG] Folder \"%s\" exists or created successfuly.\n", GetUtf8PathMessage(logsFolderName));
     fprintf(logFile, "[DEBUG] Current app folder (CWD with no \\bin): \"%s\".\n", GetUtf8PathMessage(appFolder));
-    fprintf(logFile, "[DEBUG] app.log Path: \"%s\".\n", GetUtf8PathMessage(logPath));
+    fprintf(logFile, "[DEBUG] app.log Path: \"%s\".\n", GetUtf8PathMessage(logFilePath));
 
     PathInfo *pagesFolderName = GetPathInfo(FOLDER_PAGES_L, NULL);
-    PathInfo *pagesPath = GetDefaultPathInfo();
-    if (!pagesFolderName || !pagesPath)
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, pagesFolderName);    //(6 глобально)
+    PathInfo *pagesFolder = GetDefaultPathInfo();
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, pagesFolder);          //(7 глобально)
+    if (!pagesFolderName || !pagesFolder)
     {
         FatalError("Could not initialize (PathInfo *) for folders for response files. GetPathInfo() or GetDefaultPathInfo() failed.\n");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, pagesFolderName);    //(4 глобально)
-    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, pagesPath);          //(5 глобально)
-
-    if (FAILED(StringCchPrintfW(GetChangeableUtf16Path(pagesPath), MAX_PATH, L"%ls\\response\\%ls\\", GetUtf16Path(appFolder), GetUtf16Path(pagesFolderName))))
+    if (FAILED(StringCchPrintfW(GetChangeableUtf16Path(pagesFolder), MAX_PATH, L"%ls\\" FOLDER_RESPONSE_L L"\\%ls\\", GetUtf16Path(appFolder), GetUtf16Path(pagesFolderName))))
     {
-        unsigned char *errorMessage = NULL;
+        char *errorMessage = NULL;
         MakeMessage(&errorMessage, "Could not build \"%s\" path for responces.", GetUtf8PathMessage(pagesFolderName));
         FatalError(errorMessage);
         free(errorMessage);
         return STANDARD_ERROR;
     }
-    fprintf(logFile, "[DEBUG] Built folder path \"%s\": \"%s\".\n", GetUtf8PathMessage(pagesFolderName), GetUtf8PathMessage(pagesPath));
-    if (!DropDirectory(GetUtf16Path(pagesPath)))
-        fprintf(logFile, "[ERROR] Deleting files error. Some files may remain.\n");
-    else fprintf(logFile, "[DEBUG] Directory cleaned up.\n");
-    
+    fprintf(logFile, "[DEBUG] Built folder path \"%s\": \"%s\".\n", GetUtf8PathMessage(pagesFolderName), GetUtf8PathMessage(pagesFolder));
+    creatingFoldersResult = SHCreateDirectoryExW(NULL, GetUtf16Path(pagesFolder), NULL);
+    if (creatingFoldersResult == ERROR_SUCCESS || creatingFoldersResult == ERROR_ALREADY_EXISTS)
+    {
+        fprintf(logFile, "[DEBUG] Folder \"" FOLDER_RESPONSE "\\%s\" exists or created successfuly.\n", GetUtf8PathMessage(pagesFolderName));
+        if (DropDirectory(GetUtf16Path(pagesFolder))) fprintf(logFile, "[DEBUG] Directory cleaned up or it was empty.\n");
+        else fprintf(logFile, "[ERROR] Deleting files error. Some files may remain.\n");
+    }
+    else 
+    {
+        char *errorMessage = NULL;
+        MakeMessage(&errorMessage, "Could not create \"" FOLDER_RESPONSE "\" or \"%s\" folder.", GetUtf8PathMessage(pagesFolderName));
+        FatalError(errorMessage);
+        free(errorMessage);
+        return STANDARD_ERROR;
+    }
+
     PathInfo *faviconsFolderName = GetPathInfo(FOLDER_FAVICONS_L, NULL);
-    PathInfo *faviconsPath = GetDefaultPathInfo();
-    if (!faviconsFolderName || !faviconsPath)
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, faviconsFolderName);    //(8 глобально)
+    PathInfo *faviconsFolder = GetDefaultPathInfo();
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, faviconsFolder);          //(9 глобально)
+    if (!faviconsFolderName || !faviconsFolder)
     {
         FatalError("Could not initialize (PathInfo *) for folders for response files. GetPathInfo() or GetDefaultPathInfo() failed.\n");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, faviconsFolderName);    //(4 глобально)
-    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, faviconsPath);          //(5 глобально)
-
-    if (FAILED(StringCchPrintfW(GetChangeableUtf16Path(faviconsPath), MAX_PATH, L"%ls\\response\\%ls\\", GetUtf16Path(appFolder), GetUtf16Path(faviconsFolderName))))
+    if (FAILED(StringCchPrintfW(GetChangeableUtf16Path(faviconsFolder), MAX_PATH, L"%ls\\" FOLDER_RESPONSE_L L"\\%ls\\", GetUtf16Path(appFolder), GetUtf16Path(faviconsFolderName))))
     {
-        unsigned char *errorMessage = NULL;
+        char *errorMessage = NULL;
         MakeMessage(&errorMessage, "Could not build \"%s\" path for responces", GetUtf8PathMessage(faviconsFolderName));
         FatalError(errorMessage);
         free(errorMessage);
         return STANDARD_ERROR;
     }
-    fprintf(logFile, "[DEBUG] Построен путь к папке \"%s\": \"%s\".\n", GetUtf8PathMessage(faviconsFolderName), GetUtf8PathMessage(faviconsPath));
-    if (!DropDirectory(GetUtf16Path(faviconsPath)))
-        fprintf(logFile, "[ERROR] Deleting files error. Some files may remain.\n");
-    else fprintf(logFile, "[DEBUG] Directory cleaned up.\n");
+    fprintf(logFile, "[DEBUG] Built folder path \"%s\": \"%s\".\n", GetUtf8PathMessage(faviconsFolderName), GetUtf8PathMessage(faviconsFolder));
+    creatingFoldersResult = SHCreateDirectoryExW(NULL, GetUtf16Path(faviconsFolder), NULL);
+    if (creatingFoldersResult == ERROR_SUCCESS || creatingFoldersResult == ERROR_ALREADY_EXISTS)
+    {
+        fprintf(logFile, "[DEBUG] Folder \"" FOLDER_RESPONSE "\\%s\" exists or created successfuly.\n", GetUtf8PathMessage(faviconsFolderName));
+        if (DropDirectory(GetUtf16Path(faviconsFolder))) fprintf(logFile, "[DEBUG] Directory cleaned up or it was empty.\n");
+        else fprintf(logFile, "[ERROR] Deleting files error. Some files may remain.\n");
+    }
+    else
+    {
+        char *errorMessage = NULL;
+        MakeMessage(&errorMessage, "Could not create \"" FOLDER_RESPONSE "\" or \"%s\" folder.", GetUtf8PathMessage(faviconsFolderName));
+        FatalError(errorMessage);
+        free(errorMessage);
+        return STANDARD_ERROR;
+    }
+
+    PathInfo *iconsFolderName = GetPathInfo(FOLDER_ICONS_L, NULL);
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, iconsFolderName);           //(10 глобально)
+    PathInfo *iconsFolder = GetDefaultPathInfo();
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, iconsFolder);           //(11 глобально)
+    if (!iconsFolderName || !iconsFolder)
+    {
+        FatalError("Could not initialize (PathInfo *) for folder for icon files. GetDefaultPathInfo() or GetDefaultPathInfo() failed.\n");
+        return STANDARD_ERROR;
+    }
+    if (FAILED(StringCchPrintfW(GetChangeableUtf16Path(iconsFolder), MAX_PATH, L"%ls\\" FOLDER_RESOURCES_L L"\\%ls\\", GetUtf16Path(appFolder), GetUtf16Path(iconsFolderName))))
+    {
+        char *errorMessage = NULL;
+        MakeMessage(&errorMessage, "Could not build \"%s\" path for icon files.", GetUtf8PathMessage(iconsFolderName));
+        FatalError(errorMessage);
+        free(errorMessage);
+        return STANDARD_ERROR;
+    }
+    fprintf(logFile, "[DEBUG] Built folder path \"%s\": \"%s\".\n", GetUtf8PathMessage(iconsFolderName), GetUtf8PathMessage(iconsFolder));
+    creatingFoldersResult = SHCreateDirectoryExW(NULL, GetUtf16Path(iconsFolder), NULL);
+    if (creatingFoldersResult == ERROR_SUCCESS || creatingFoldersResult == ERROR_ALREADY_EXISTS)
+        fprintf(logFile, "[DEBUG] Folder \"" FOLDER_RESOURCES "\\%s\" exists or created successfuly.\n", GetUtf8PathMessage(iconsFolderName));
+    else 
+    {
+        char *errorMessage = NULL;
+        MakeMessage(&errorMessage, "Could not create \"" FOLDER_RESOURCES "\" or \"%s\" folder.", GetUtf8PathMessage(iconsFolderName));
+        FatalError(errorMessage);
+        free(errorMessage);
+        return STANDARD_ERROR;
+    }
 
     WIN32_FIND_DATAW fileData;
     HANDLE searchingFilesHandle;
     wchar_t searchToken[MAX_PATH];
     GrowingList existingIcons;
-    PushCleanupStack(cleanupStack, Wrap_DestroyGrowingList, &existingIcons);        //(8 глобально)
+    PushCleanupStack(cleanupStack, Wrap_DestroyGrowingList, &existingIcons);        //(12 глобально)
 
     if (InitGrowingList(&existingIcons, DestroyIconFileInfo))
     {
-        if (SUCCEEDED(StringCchPrintfW(searchToken, MAX_PATH, L"%ls\\resources\\icons\\*.ico", GetUtf16Path(appFolder))))
+        if (SUCCEEDED(StringCchPrintfW(searchToken, MAX_PATH, L"%ls*.ico", GetUtf16Path(iconsFolder))))
         {
             searchingFilesHandle = FindFirstFileW(searchToken, &fileData);
             if (searchingFilesHandle == INVALID_HANDLE_VALUE)
@@ -353,7 +444,7 @@ int main(void)
                     if
                     (
                         StringCchCopyW(GetChangeableUtf16Path(ifi->name), MAX_PATH, fileData.cFileName) != S_OK ||
-                        FAILED(StringCchPrintfW(GetChangeableUtf16Path(ifi->path), MAX_PATH, L"%ls\\resources\\icons\\%ls", GetUtf16Path(appFolder), GetUtf16Path(ifi->name)))
+                        FAILED(StringCchPrintfW(GetChangeableUtf16Path(ifi->path), MAX_PATH, L"%ls%ls", GetUtf16Path(iconsFolder), GetUtf16Path(ifi->name)))
                     )
                     {
                         fprintf(logFile, "[ERROR] Failed to initialize file object with its name or path. StringCchCopyW() or StringCchPrintfW() failed.\n");
@@ -378,20 +469,39 @@ int main(void)
     }
     else fprintf(logFile, "[ERROR] Could not initialize (GrowingList) for existing icon file objects. InitGrowingList() failed.\n");
 
-    PathInfo *folderTempResources = GetDefaultPathInfo();
-    if (!folderTempResources)
+    PathInfo *tempFolderName = GetPathInfo(FOLDER_TEMP_L, NULL);
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, tempFolderName);       // (13 глобально)
+    PathInfo *tempFolder = GetDefaultPathInfo();
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, tempFolder);    // (14 глобально)
+    if (!tempFolderName || !tempFolder)
     {
-        FatalError("Could not initialize (PathInfo *) for temp icon file pathes. GetDefaultPathInfo() failed.\n");
+        FatalError("Could not initialize (PathInfo *) for folder for temp icon files. GetPathInfo() or GetDefaultPathInfo() failed.\n");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, folderTempResources);    // (9 глобально)
-    if (SUCCEEDED(StringCchPrintfW(GetChangeableUtf16Path(folderTempResources), MAX_PATH, L"%ls\\resources\\temp\\", GetUtf16Path(appFolder))))
+    if (FAILED(StringCchPrintfW(GetChangeableUtf16Path(tempFolder), MAX_PATH, L"%ls\\" FOLDER_RESOURCES_L L"\\%ls\\", GetUtf16Path(appFolder), GetUtf16Path(tempFolderName))))
     {
-        fprintf(logFile, "[DEBUG] Built directory path \"resources\\temp\": \"%s\".\n", GetUtf8PathMessage(folderTempResources));
-        if (DropDirectory(GetUtf16Path(folderTempResources))) fprintf(logFile, "[DEBUG] Directory cleaned up.\n");
+        char *errorMessage = NULL;
+        MakeMessage(&errorMessage, "Could not build \"%s\" path for temp icon files.", GetUtf8PathMessage(tempFolderName));
+        FatalError(errorMessage);
+        free(errorMessage);
+        return STANDARD_ERROR;
+    }
+    fprintf(logFile, "[DEBUG] Built folder path \"%s\": \"%s\".\n", GetUtf8PathMessage(tempFolderName), GetUtf8PathMessage(tempFolder));
+    creatingFoldersResult = SHCreateDirectoryExW(NULL, GetUtf16Path(tempFolder), NULL);
+    if (creatingFoldersResult == ERROR_SUCCESS || creatingFoldersResult == ERROR_ALREADY_EXISTS)
+    {
+        fprintf(logFile, "[DEBUG] Folder \"" FOLDER_RESOURCES "\\%s\" exists or created successfuly.\n", GetUtf8PathMessage(tempFolderName));
+        if (DropDirectory(GetUtf16Path(tempFolder))) fprintf(logFile, "[DEBUG] Directory cleaned up or it was empty.\n");
         else fprintf(logFile, "[ERROR] Error while cleaning direcotry. Some files may remain.\n");
     }
-    else fprintf(logFile, "[ERROR] Could not build path to resources\\temp folder to clean it. Some files may remain.\n");
+    else 
+    {
+        char *errorMessage = NULL;
+        MakeMessage(&errorMessage, "Could not create \"" FOLDER_RESOURCES "\" or \"%s\" folder.", GetUtf8PathMessage(tempFolderName));
+        FatalError(errorMessage);
+        free(errorMessage);
+        return STANDARD_ERROR;
+    }
 
     wchar_t *desktopPathTempPtr = NULL;
     if (FAILED(SHGetKnownFolderPath(
@@ -412,7 +522,7 @@ int main(void)
         CoTaskMemFree(desktopPathTempPtr);  //Потому что ещё не удалось передать владение указателем на COM-память
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, desktopPath);   // (10 глобально)
+    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, desktopPath);   // (15 глобально)
     fprintf(logFile, "[DEBUG] Desktop path: \"%s\".\n", GetUtf8PathMessage(desktopPath));
     
     if (FAILED(StringCchPrintfW(searchToken, MAX_PATH, L"%ls\\*.url", GetUtf16Path(desktopPath))))
@@ -436,14 +546,14 @@ int main(void)
             return STANDARD_ERROR;
         }
     }
-    PushCleanupStack(cleanupStack, Wrap_FindClose, &searchingFilesHandle);  // (11 глобально)
+    PushCleanupStack(cleanupStack, Wrap_FindClose, &searchingFilesHandle);  // (16 глобально)
 
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
     {
         FatalError("Could not initialize the cURL environment. curl_global_init() failed.");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Wrap_curl_global_cleanup, NULL);        // (12 глобально)
+    PushCleanupStack(cleanupStack, Wrap_curl_global_cleanup, NULL);        // (17 глобально)
     IconsProcessContainer iconsProcessContainer;
     iconsProcessContainer.multi = curl_multi_init();
     if (!iconsProcessContainer.multi)
@@ -456,14 +566,14 @@ int main(void)
         FatalError("Could not initialize (iconProcessContainer::iconProcessUnits). InitGrowingList() failed.\n");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, IconsProcessContainerDestructor, &iconsProcessContainer);    // (13 глобально)
+    PushCleanupStack(cleanupStack, IconsProcessContainerDestructor, &iconsProcessContainer);    // (18 глобально)
 
     if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)))
     {
         FatalError("[ERROR] Could not initialize COM. CoInitializeEx() failed.");
         return STANDARD_ERROR;
     }
-    PushCleanupStack(cleanupStack, Wrap_CoUninitialize, NULL);  // (14 глобально)
+    PushCleanupStack(cleanupStack, Wrap_CoUninitialize, NULL);  // (19 глобально)
 
     PROPSPEC propspec[2] =
     {
@@ -559,7 +669,7 @@ int main(void)
         }
         if
         (
-            FAILED(StringCchPrintfW(GetChangeableUtf16Path(currentUnit->pageResponseFilePath), MAX_PATH, L"%ls%ls", GetUtf16Path(pagesPath), GetUtf16Path(currentUnit->fileName))) ||
+            FAILED(StringCchPrintfW(GetChangeableUtf16Path(currentUnit->pageResponseFilePath), MAX_PATH, L"%ls%ls", GetUtf16Path(pagesFolder), GetUtf16Path(currentUnit->fileName))) ||
             PathCchRenameExtension(GetChangeableUtf16Path(currentUnit->pageResponseFilePath), MAX_PATH, DEFAULT_EXTENTION_OF_FILES_PAGES_L) != S_OK
         )
         {
@@ -653,31 +763,31 @@ int main(void)
         {
             PROPVARIANT setIconPathValues[2];
             PropVariantInit(&setIconPathValues[0]);
-            PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[0]);   //(14 глобально +1 временно ->15)
+            PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[0]);   //(19 глобально +1 временно ->20)
             PropVariantInit(&setIconPathValues[1]);
-            PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[1]);   //(14 глобально +2 временно ->16)
+            PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[1]);   //(19 глобально +2 временно ->21)
 
             if (FAILED(currentUnit->iPropertyStorage_Intshcut->lpVtbl->WriteMultiple(
                 currentUnit->iPropertyStorage_Intshcut, 2, propspec, setIconPathValues, PID_FIRST_USABLE)))
             {
                 fprintf(logFile, "[ERROR] Failed to reset icon properties to default values. IPropertyStorage::WriteMultiple() failed.\n");
-                PartialDeallocation(cleanupStack, 2);   //(16->14)
+                PartialDeallocation(cleanupStack, 2);   //(21->19)
                 continue;
             }
             if (FAILED(currentUnit->iPropertyStorage_Intshcut->lpVtbl->Commit(currentUnit->iPropertyStorage_Intshcut, STGC_DEFAULT)))
             {
                 fprintf(logFile, "[ERROR] Failed to commit property storage changes. IPropertyStorage::Commit() failed.\n");
-                PartialDeallocation(cleanupStack, 2);   //(16->14)
+                PartialDeallocation(cleanupStack, 2);   //(21->19)
                 continue;
             }
             if (FAILED(currentUnit->iPersistFile->lpVtbl->Save(currentUnit->iPersistFile, GetUtf16Path(currentUnit->desktopUrlFilePath), FALSE)))
             {
                 fprintf(logFile, "[ERRROR] Failed to save Internet Shortcut changes. IPersistFile::Save() failed.\n");
-                PartialDeallocation(cleanupStack, 2);   //(16->14)
+                PartialDeallocation(cleanupStack, 2);   //(21->19)
                 continue;
             }
             fprintf(logFile, "[DEBUG] Icon path and icon index successfully reset.\n");
-            PartialDeallocation(cleanupStack, 2);       //(16->16)
+            PartialDeallocation(cleanupStack, 2);       //(21->19)
         }
 
         IconFileInfo *ifi = SearchGrowingList(&existingIcons, CompareIconFileInfoToIpuName, (void *)GetUtf16Path(currentUnit->fileName));
@@ -707,7 +817,7 @@ int main(void)
             FatalError("Could not initialize libvips. VIPS_INIT() failed.");
             return STANDARD_ERROR;
         }
-        PushCleanupStack(cleanupStack, Wrap_vips_shutdown, NULL);   // (14 глобально +1 локально ->15)
+        PushCleanupStack(cleanupStack, Wrap_vips_shutdown, NULL);   // (19 глобально +1 локально ->20)
 
         fprintf(logFile, "[DEBUG] Started transfer cycle...\n");
         int runningHandles; //склько запросов ещё НЕ завершились
@@ -741,7 +851,7 @@ int main(void)
                     }
 
                     long responseCode;
-                    unsigned char *contentType = NULL;
+                    char *contentType = NULL;
                     switch (ipu->downloadingMode)
                     {
                         case DM_PageDefault:
@@ -756,7 +866,7 @@ int main(void)
                                 curl_easy_strerror(curlMsg->data.result), 
                                 ipu->url
                             );
-                            unsigned char *lastUrl = NULL;
+                            char *lastUrl = NULL;
                             if (curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &lastUrl) != CURLE_OK)
                             {
                                 FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
@@ -811,25 +921,25 @@ int main(void)
                                     PrintStream(&logFileStream, "[ERROR] Response size exceeds INT_MAX and can not be processed.\n");
                                     continue;
                                 }
-                                unsigned char *buffer = malloc(responceFileSize.QuadPart);
+                                char *buffer = malloc(responceFileSize.QuadPart);
                                 if (!buffer)
                                 {
                                     FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
                                     PrintStream(&logFileStream, "[ERROR] Failed to allocate memory for the web page response buffer. malloc() failed.\n");
                                     continue;
                                 }
-                                PushCleanupStack(cleanupStack, Wrap_Free, buffer);     //(14 глобально +1 локально +1 временно ->16)
+                                PushCleanupStack(cleanupStack, Wrap_Free, buffer);     //(19 глобально +1 локально +1 временно ->21)
 
                                 fread(buffer, 1, responceFileSize.QuadPart, ipu->responseFile);
-                                unsigned char *faviconUrl = GetFaviconUrl(buffer, (int)responceFileSize.QuadPart, lastUrl);
+                                char *faviconUrl = GetFaviconUrl(buffer, (int)responceFileSize.QuadPart, lastUrl);
                                 if(!faviconUrl)
                                 {
                                     FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
                                     PrintStream(&logFileStream, "[ERROR] Could not get favicon URL. GetFaviconUrl() failed.\n");
-                                    SingleDeallocation(cleanupStack);   //(16->15)
+                                    SingleDeallocation(cleanupStack);   //(21->20)
                                     continue;
                                 }
-                                PushCleanupStack(cleanupStack, Wrap_Free, faviconUrl);     //(14 глобально +1 локально +2 временно ->17)
+                                PushCleanupStack(cleanupStack, Wrap_Free, faviconUrl);     //(19 глобально +1 локально +2 временно ->22)
                                 PrintStream(&logBufferStream, "[DEBUG] Favicon URL: %s.\n", faviconUrl);
                                 
                                 curl_multi_remove_handle(iconsProcessContainer.multi, easy);
@@ -845,7 +955,7 @@ int main(void)
 
                                 ++successfulPagesResponses;
                                 PrintStream(&logBufferStream, "[DEBUG] Successfuly configured curl easy handle to download favicon.\n");
-                                PartialDeallocation(cleanupStack, 2);       //(17->15)
+                                PartialDeallocation(cleanupStack, 2);       //(22->20)
                             }
                             else FlushMemoryBufferToFile(&ipu->logBuffer, logFile);
                             break;
@@ -868,7 +978,7 @@ int main(void)
                             if 
                             (
                                 !(imageType = GetExtentionFromContentType(contentType)) ||
-                                FAILED(StringCchPrintfW(GetChangeableUtf16Path(ipu->faviconResponseFilePath), MAX_PATH, L"%ls%ls", GetUtf16Path(faviconsPath), GetUtf16Path(ipu->fileName))) ||
+                                FAILED(StringCchPrintfW(GetChangeableUtf16Path(ipu->faviconResponseFilePath), MAX_PATH, L"%ls%ls", GetUtf16Path(faviconsFolder), GetUtf16Path(ipu->fileName))) ||
                                 PathCchRenameExtension(GetChangeableUtf16Path(ipu->faviconResponseFilePath), MAX_PATH, imageType->extention) != S_OK
                             )
                             {
@@ -885,7 +995,7 @@ int main(void)
                             }
                             FlushMemoryBufferToFile(&ipu->faviconBuffer, ipu->responseFile);
 
-                            fprintf(logFile, "[DEBUG] Successfuly download \"%s\".\n", GetUtf8PathMessage(faviconsFolderName));
+                            fprintf(logFile, "[DEBUG] Favicon was downloaded successfully.\n");
                             ++successfulFaviconResponses;
 
                             
@@ -904,18 +1014,23 @@ int main(void)
                                 ++newIcons;
                                 fprintf(logFile, "[DEBUG] A new icon will be created.\n");
                                 PathInfo *newIconFilePath = GetDefaultPathInfo();
+                                if (!newIconFilePath)
+                                {
+                                    fprintf(logFile, "[DEBUG] Could not initialize (PathInfo *) for temporary new icon file path. GetDefaultPathInfo() failed.\n");
+                                    continue;
+                                }
                                 if
                                 (
-                                    FAILED(StringCchPrintfW(GetChangeableUtf16Path(newIconFilePath), MAX_PATH, L"%ls\\resources\\icons\\%ls", GetUtf16Path(appFolder), GetUtf16Path(ipu->fileName))) ||
+                                    FAILED(StringCchPrintfW(GetChangeableUtf16Path(newIconFilePath), MAX_PATH, L"%ls%ls", GetUtf16Path(iconsFolder), GetUtf16Path(ipu->fileName))) ||
                                     PathCchRenameExtension(GetChangeableUtf16Path(newIconFilePath), MAX_PATH, ICO_W) != S_OK
                                 )
                                 {
-                                    fprintf(logFile, "[ERROR] Could not build path to image file. StringCchPrintfW() or PathCchRenameExtension() failed\n");
+                                    fprintf(logFile, "[ERROR] Could not build path to image file. StringCchPrintfW() or PathCchRenameExtension() failed.\n");
                                     DestroyPathInfo(newIconFilePath);
                                     continue;
                                 }
                                 iconFilePathPtr = (PathInfoPtr){ newIconFilePath, true };
-                                fprintf("[DEBUG] Built path for new icon: \"%s\"\n", GetUtf8PathMessage(newIconFilePath));
+                                fprintf(logFile, "[DEBUG] Built path for new icon: \"%s\"\n", GetUtf8PathMessage(newIconFilePath));
                             }
 
                             FILE *iconFile = _wfopen(GetUtf16Path(iconFilePathPtr.ptr), L"wb");
@@ -925,7 +1040,7 @@ int main(void)
                                 fprintf(logFile, "[ERROR] Could not open icon file. _wfopen() failed\n");
                                 continue;
                             }
-                            PushCleanupStack(cleanupStack, Wrap_FClose, iconFile);  //(14 глобально +1 локально +1 временно ->16))
+                            PushCleanupStack(cleanupStack, Wrap_FClose, iconFile);  //(19 глобально +1 локально +1 временно ->21))
 
                             if (imageType->type != imgTypeIco)
                             {
@@ -946,7 +1061,7 @@ int main(void)
                                         if (vips_svgload_buffer(ipu->faviconBuffer.content, ipu->faviconBuffer.length, &tempSvgImage, NULL))
                                         {
                                             fprintf(logFile, "[ERROR] Failed to load SVG image. vips_svgload_buffer() failed.\n");
-                                            SingleDeallocation(cleanupStack);   //(16->15)
+                                            SingleDeallocation(cleanupStack);   //(21->19)
                                             continue;
                                         }
                                         int svgWidth = vips_image_get_width(tempSvgImage);
@@ -955,14 +1070,14 @@ int main(void)
                                         if (svgWidth != svgHeight)
                                         {
                                             fprintf(logFile, "[ERROR] SVG image is not square.\n");
-                                            SingleDeallocation(cleanupStack);   //(16->15)
+                                            SingleDeallocation(cleanupStack);   //(21->19)
                                             continue;
                                         }
                                         scale = 256.0 / svgWidth;
                                         if (vips_svgload_buffer(ipu->faviconBuffer.content, ipu->faviconBuffer.length, &image, NULL))
                                         {
                                             fprintf(logFile, "[ERROR] Failed to load SVG image. vips_svgload_buffer() failed.\n");
-                                            SingleDeallocation(cleanupStack);   //(16->15)
+                                            SingleDeallocation(cleanupStack);   //(21->19)
                                             continue;
                                         }
                                     }
@@ -974,47 +1089,47 @@ int main(void)
                                     if (!image)
                                     {
                                         fprintf(logFile, "[ERROR] Could not load image file to build icon. vips_image_new_from_file() failed.\n");
-                                        SingleDeallocation(cleanupStack);       //(16->15)
+                                        SingleDeallocation(cleanupStack);       //(21->19)
                                         continue;
                                     }
-                                    PushCleanupStack(cleanupStack, Wrap_g_object_unref, image); //(14 глобально +1 локально +2 временно ->17))
+                                    PushCleanupStack(cleanupStack, Wrap_g_object_unref, image); //(19 глобально +1 локально +2 временно ->22))
                                     PathInfo *pngOutputFilePath = GetDefaultPathInfo();
-                                    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, pngOutputFilePath); //(14 глобально +1 локально +3 временно ->18)
+                                    PushCleanupStack(cleanupStack, Wrap_DestroyPathInfo, pngOutputFilePath); //(19 глобально +1 локально +3 временно ->23)
                                     if 
                                     (
-                                        FAILED(StringCchPrintfW(GetChangeableUtf16Path(pngOutputFilePath), MAX_PATH, L"%ls%ls", GetUtf16Path(folderTempResources), GetUtf16Path(ipu->fileName))) ||
+                                        FAILED(StringCchPrintfW(GetChangeableUtf16Path(pngOutputFilePath), MAX_PATH, L"%ls%ls", GetUtf16Path(tempFolder), GetUtf16Path(ipu->fileName))) ||
                                         PathCchRenameExtension(GetChangeableUtf16Path(pngOutputFilePath), MAX_PATH, PNG_W) != S_OK
                                     )
                                     {
                                         fprintf(logFile, "[ERROR] Could not build path to image file. StringCchPrintfW() or PathCchRenameExtension() failed.\n");
-                                        PartialDeallocation(cleanupStack, 3);       //(18->15)
+                                        PartialDeallocation(cleanupStack, 3);       //(23->20)
                                         continue;
                                     }
                                     if (!GetUtf8Path(pngOutputFilePath))
                                     {
                                         fprintf(logFile, "[ERROR] Failed to convert image path to UTF-8. WstringToUtf8() failed.\n");
-                                        PartialDeallocation(cleanupStack, 3);       //(18->15)
+                                        PartialDeallocation(cleanupStack, 3);       //(23->20)
                                         continue;
                                     }
 
                                     if (vips_pngsave(image, GetUtf8Path(pngOutputFilePath), NULL))
                                     {
                                         fprintf(logFile, "[ERROR] Could not save icon as a PNG file. vips_pngsave() failed.\n");
-                                        PartialDeallocation(cleanupStack, 3);       //(18->15)
+                                        PartialDeallocation(cleanupStack, 3);       //(23->20)
                                         continue;
                                     }
 
                                     if (!(iconBuffer.buffer = malloc(sizeof(MemoryBuffer))))
                                     {
                                         fprintf(logFile, "[ERROR] Could not allocate memory for (imageBufferInfo *)(iconBuffer.buffer). malloc() failed.\n");
-                                        PartialDeallocation(cleanupStack, 3);       //(18->15)
+                                        PartialDeallocation(cleanupStack, 3);       //(23->20)
                                         continue;
                                     }
                                     iconBuffer.isОriginal = true;
                                     if (vips_pngsave_buffer(image, (void **)&iconBuffer.buffer->content, &iconBuffer.buffer->length, NULL) != 0)
                                     {
                                         fprintf(logFile, "[ERROR] Could not save icon to buffer. vips_pngsave_buffer() failed.\n");
-                                        PartialDeallocation(cleanupStack, 3);       //(18->15)
+                                        PartialDeallocation(cleanupStack, 3);       //(23->20)
                                         continue;
                                     }
 
@@ -1030,7 +1145,7 @@ int main(void)
                                     iconDirectoryEntry.height = image->Ysize == 256 ? 0 : (uint8_t)image->Ysize;
 
                                     fprintf(logFile, "[DEBUG] Successfuly saved temporary .png file: \"%s\"\n", GetUtf8PathMessage(pngOutputFilePath));
-                                    PartialDeallocation(cleanupStack, 2);       //(18->16) оставляем открытый (FILE *)iconFile
+                                    PartialDeallocation(cleanupStack, 2);       //(23->21) оставляем открытый (FILE *)iconFile
                                 }
                                 else
                                 {
@@ -1045,7 +1160,7 @@ int main(void)
                                         fprintf(logFile, "[ERROR] Invalid PNG file signature.");
                                         continue;
                                     }
-                                    unsigned char *data = iconBuffer.buffer->content;
+                                    char *data = iconBuffer.buffer->content;
                                     uint32_t width  =   ((uint32_t)data[16] << 24)  | ((uint32_t)data[17] << 16)  | ((uint32_t)data[18] << 8) | (uint32_t)data[19]; //первые байты самые "важные" (с 16 до 19)
                                     uint32_t height =   ((uint32_t)data[20] << 24)  | ((uint32_t)data[21] << 16)  | ((uint32_t)data[22] << 8) | (uint32_t)data[23]; //тоже самое (с 20 до 24)
 
@@ -1060,14 +1175,14 @@ int main(void)
                                         case 6:  bpp = bit_depth * 4;   break; // RGBA
                                     }
 
-                                    iconDirectoryEntry.width  = (width == 256) ? 0 : (unsigned char)width;
-                                    iconDirectoryEntry.height = (height == 256) ? 0 : (unsigned char)height;
+                                    iconDirectoryEntry.width  = (width == 256) ? 0 : (char)width;
+                                    iconDirectoryEntry.height = (height == 256) ? 0 : (char)height;
                                     iconDirectoryEntry.bpp    = bpp;   
                                 }
                                 if (iconBuffer.buffer->length > UINT32_MAX)
                                 {
                                     fprintf(logFile, "[ERROR] Image is too large. File is not supported.\n");
-                                    SingleDeallocation(cleanupStack);       //(16->15)
+                                    SingleDeallocation(cleanupStack);       //(21->20)
                                     continue;
                                 }
                                 iconDirectoryEntry.size = iconBuffer.buffer->length;
@@ -1085,7 +1200,7 @@ int main(void)
                             else fwrite(ipu->faviconBuffer.content, 1, ipu->faviconBuffer.length, iconFile);
 
                             fprintf(logFile, "[DEBUG] Icon saved successfully.\n");
-                            SingleDeallocation(cleanupStack);    // (16->15) закрываем (FILE *)iconFile
+                            SingleDeallocation(cleanupStack);    // (21->19) закрываем (FILE *)iconFile
 
                             //сохранить скаченную иконку в COM-объект и на рабочий стол
                             uint32_t uriLength = ARRAYSIZE(uriBuffer);
@@ -1097,20 +1212,20 @@ int main(void)
 
                             PROPVARIANT setIconPathValues[2];
                             PropVariantInit(&setIconPathValues[0]);
-                            PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[0]);   //(14 глобально +1 локально +1 временно ->16)
+                            PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[0]);   //(19 глобально +1 локально +1 временно ->21)
                             setIconPathValues[0].vt = VT_LPWSTR;
                             setIconPathValues[0].pwszVal = CoTaskMemAlloc((uriLength + 1) * sizeof(wchar_t));
                             if (!setIconPathValues[0].pwszVal)
                             {
                                 fprintf(logFile, "[ERRPR] Failed to allocate memory from the COM heap for the URI string. CoTaskMemAlloc() failed.\n");
-                                SingleDeallocation(cleanupStack);   //(16->15)
+                                SingleDeallocation(cleanupStack);   //(21->20)
                                 continue;
                             }
                             memcpy(setIconPathValues[0].pwszVal, uriBuffer, uriLength * sizeof(wchar_t));
                             setIconPathValues[0].pwszVal[uriLength] = L'\0';
 
                             PropVariantInit(&setIconPathValues[1]);
-                            PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[1]);   //(14 глобально +1 локально +2 временно ->17)
+                            PushCleanupStack(cleanupStack, Wrap_PropVariantClear, &setIconPathValues[1]);   //(19 глобально +1 локально +2 временно ->22)
                             setIconPathValues[1].vt = VT_I4;
                             setIconPathValues[1].lVal = 0;
 
@@ -1118,25 +1233,25 @@ int main(void)
                                 ipu->iPropertyStorage_Intshcut, 2, propspec, setIconPathValues, PID_FIRST_USABLE)))
                             {
                                 fprintf(logFile, "[ERROR] Failed to write new icon properties to property storage. IPropertyStorage::WriteMultiple() failed.\n");
-                                PartialDeallocation(cleanupStack, 2);   //(17->15)
+                                PartialDeallocation(cleanupStack, 2);   //(22->20)
                                 continue;
                             }
                             if (FAILED(ipu->iPropertyStorage_Intshcut->lpVtbl->Commit(ipu->iPropertyStorage_Intshcut, STGC_DEFAULT)))
                             {
                                 fprintf(logFile, "[ERROR] Failed to commit property storage changes. IPropertyStorage::Commit() failed.\n");
-                                PartialDeallocation(cleanupStack, 2);   //(17->15)
+                                PartialDeallocation(cleanupStack, 2);   //(22->20)
                                 continue;
                             }
                             if (FAILED(ipu->iPersistFile->lpVtbl->Save(ipu->iPersistFile, GetUtf16Path(ipu->desktopUrlFilePath), FALSE)))
                             {
                                 fprintf(logFile, "[ERRROR] Failed to save Internet Shortcut changes. IPersistFile::Save() failed.\n");
-                                PartialDeallocation(cleanupStack, 2);   //(17->15)
+                                PartialDeallocation(cleanupStack, 2);   //(22->20)
                                 continue;
                             }
                             fprintf(logFile, "[DEBUG] Internet Shortcut icon updated successfully.\n");
                             
                             ++successfulyUpdatedIcons;
-                            PartialDeallocation(cleanupStack, 2);       //(17->15)
+                            PartialDeallocation(cleanupStack, 2);       //(22->20)
                             break;
                         }
                     }
@@ -1148,14 +1263,14 @@ int main(void)
         
         fprintf(logFile, "[INFO] \"%s\" responses: %zd\n[INFO] Successful \"%s\" responses: %zd\n", GetUtf8PathMessage(pagesFolderName), pagesResponses, GetUtf8PathMessage(pagesFolderName), successfulPagesResponses);
         fprintf(logFile, "[INFO] \"%s\" responses: %zd\n[INFO] Successful \"%s\" responses: %zd\n", GetUtf8PathMessage(faviconsFolderName), faviconResponses, GetUtf8PathMessage(faviconsFolderName), successfulFaviconResponses);
-        fprintf(logFile, "[DEBUG] New icon files: %zu\n", newIcons);
-        fprintf(logFile, "[DEBUG] Replaced icon files: %zu\n", replacedIcons);
-        fprintf(logFile, "[DEBUG] Successfuly updated internet shortcut's icons: %zd", successfulyUpdatedIcons);
+        fprintf(logFile, "[INFO] New icon files: %zu\n", newIcons);
+        fprintf(logFile, "[INFO] Replaced icon files: %zu\n", replacedIcons);
+        fprintf(logFile, "[INFO] Successfuly updated internet shortcut's icons: %zd\n", successfulyUpdatedIcons);
 
         printf("Updated icons: %zd\n", successfulyUpdatedIcons);
         printf("For more information, see the log file at logs/app.log\n");
 
-        SingleDeallocation(cleanupStack);    //(15->14)
+        SingleDeallocation(cleanupStack);    //(20->19)
     }
 
     fprintf(logFile, "[DEBUG] Deleting redundant icons ...\n");
@@ -1179,9 +1294,9 @@ int main(void)
     if (deletedAnyFiles) fprintf(logFile, "\n");
     else fprintf(logFile, "[DEBUG] No such files.\n");
 
-    fprintf(logFile, "[INFO] Found files: %zd.\n", iconsProcessContainer.iconProcessUnits.length);
-    fprintf(logFile, "[INFO] Processed files correctly: %zd.\n", DesktopFilesProcessedCorrectly);
-    fprintf(logFile, "[DEBUG] Deleted icon files: %zu.\n", deletedIcons);
+    fprintf(logFile, "[INFO] Found internet shortcuts: %zd.\n", iconsProcessContainer.iconProcessUnits.length);
+    fprintf(logFile, "[INFO] Processed internet shortcuts correctly: %zd.\n", DesktopFilesProcessedCorrectly);
+    fprintf(logFile, "[DEBUG] Deleted deprecated icon files: %zu.\n", deletedIcons);
     
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);   //для обновления ярлыков
     printf("Done.\n");
@@ -1251,7 +1366,7 @@ bool DropDirectory(const wchar_t *directory)
     return returnValue;
 }
 
-int vMakeMessage(unsigned char **buffer, const unsigned char *format, va_list ap)
+int vMakeMessage(char **buffer, const char *format, va_list ap)
 {
     va_list ap_copy;
     va_copy(ap_copy, ap);
@@ -1269,7 +1384,7 @@ int vMakeMessage(unsigned char **buffer, const unsigned char *format, va_list ap
     return -1;
 }
 
-int MakeMessage(unsigned char **buffer, const unsigned char *format, ...)
+int MakeMessage(char **buffer, const char *format, ...)
 {
     va_list ap;
     va_start(ap, format);
@@ -1278,11 +1393,11 @@ int MakeMessage(unsigned char **buffer, const unsigned char *format, ...)
     return len;
 }
 
-int PrintStream(StreamInfo *info, const unsigned char *format, ...)
+int PrintStream(StreamInfo *info, const char *format, ...)
 {
     va_list ap;
     va_start(ap, format);
-    unsigned char *data;
+    char *data;
     int dataLength = vMakeMessage(&data, format, ap);
     va_end(ap);
     if (dataLength < 0) return -1;
@@ -1291,7 +1406,7 @@ int PrintStream(StreamInfo *info, const unsigned char *format, ...)
     return res ? dataLength : -1;
 }
 
-void CurlGetinfoFailMessage(StreamInfo *streamInfo, const unsigned char *type) 
+void CurlGetinfoFailMessage(StreamInfo *streamInfo, const char *type) 
 {
     PrintStream(streamInfo, "[ERROR] Could not get info from curl easy handle. curl_easy_getinfo(%s) failed.\n", type);
 }
@@ -1310,7 +1425,7 @@ bool WriteCurlResponseCode(CURL *easy, StreamInfo *stream, long *responseCode)
     }
 }
 
-bool WriteCurlContentType(CURL *easy, StreamInfo *stream, unsigned char **contentType)
+bool WriteCurlContentType(CURL *easy, StreamInfo *stream, char **contentType)
 {
     if (curl_easy_getinfo(easy, CURLINFO_CONTENT_TYPE, contentType) == CURLE_OK)
     {
@@ -1325,23 +1440,23 @@ bool WriteCurlContentType(CURL *easy, StreamInfo *stream, unsigned char **conten
     return false;
 }
 
-bool WriteStream(StreamInfo *info, const unsigned char *data, size_t dataLength)
+bool WriteStream(StreamInfo *info, const char *data, size_t dataLength)
 {
     return info->write(info->stream, data, dataLength);
 }
 
-bool SIWrap_fwrite(void *file, const unsigned char *data, size_t dataLength)
+bool SIWrap_fwrite(void *file, const char *data, size_t dataLength)
 {
     fwrite(data, 1, dataLength, (FILE *)file);
     return true;
 }
 
-bool SIWrap_WriteMemoryBuffer(void *memoryBuffer, const unsigned char *data, size_t dataLength)
+bool SIWrap_WriteMemoryBuffer(void *memoryBuffer, const char *data, size_t dataLength)
 {
     return WriteMemoryBuffer((MemoryBuffer *)memoryBuffer, data, dataLength);
 }
 
-const ImageContentType *GetExtentionFromContentType(const unsigned char *contentType)
+const ImageContentType *GetExtentionFromContentType(const char *contentType)
 {
     for (size_t i = 0; i < contentTypes.quantity; ++i)
     {
@@ -1376,9 +1491,9 @@ bool CompareIconFileInfoToIpuName(void *ifiVoidPtr, void *desiredNameVoidPtr)
     return false;
 }
 
-static void FatalError(const unsigned char *message)
+static void FatalError(const char *message)
 {
-    unsigned char nullMessage[] = "Could not build error message.";
+    char nullMessage[] = "Could not build error message.";
     if(logFile)
     {
         fprintf(logFile, "[FATAL ERROR] %s\n", message ? message : nullMessage);
@@ -1465,6 +1580,7 @@ void Wrap_PropVariantClear(void *arg)
 
 void Wrap_DestroyPathInfo(void *arg)
 {
+    if (!arg) return;
     DestroyPathInfo((PathInfo *)arg);
 }
 
@@ -1477,7 +1593,7 @@ void DestroyIconFileInfo(void *arg)
 }
 
 
-unsigned char *GetFaviconUrl(const unsigned char *buffer, int size, const unsigned char *base_url)
+char *GetFaviconUrl(const char *buffer, int size, const char *base_url)
 {
     xmlDocPtr doc = htmlReadMemory(
         buffer,
@@ -1517,19 +1633,19 @@ unsigned char *GetFaviconUrl(const unsigned char *buffer, int size, const unsign
             href = xmlNodeGetContent(result->nodesetval->nodeTab[0]);
     }
 
-    unsigned char *finalUrl = NULL;
+    char *finalUrl = NULL;
     if (href)
     {
         // если ссылка абсолютная
-        if (strstr((unsigned char *)href, "http://") || strstr((unsigned char *)href, "https://"))
-            finalUrl = strdup((unsigned char *)href);
+        if (strstr((char *)href, "http://") || strstr((char *)href, "https://"))
+            finalUrl = strdup((char *)href);
         else
         {
             // относительная -> делаем абсолютную
             xmlChar *abs = xmlBuildURI(href, (xmlChar *)base_url);
             if (abs)
             {
-                finalUrl = strdup((unsigned char *)abs);
+                finalUrl = strdup((char *)abs);
                 xmlFree(abs);
             }
         }

@@ -4,9 +4,9 @@
 #include <string.h>
 #include "memory buffer.h"
 
-bool WriteMemoryBuffer(MemoryBuffer *memoryBuffer, const unsigned char *data, size_t dataLength)
+bool WriteMemoryBuffer(MemoryBuffer *memoryBuffer, const char *data, size_t dataLength)
 {
-    unsigned char *temp = realloc(memoryBuffer->content, memoryBuffer->length + dataLength);
+    char *temp = realloc(memoryBuffer->content, memoryBuffer->length + dataLength);
     if (!temp) return false;
     memoryBuffer->content = temp;
     memcpy(memoryBuffer->content + memoryBuffer->length, data, dataLength);

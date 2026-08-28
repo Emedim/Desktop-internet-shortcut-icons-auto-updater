@@ -3,11 +3,11 @@
 
 typedef struct 
 {
-    unsigned char *content;
+    char *content;
     size_t length;
 } MemoryBuffer;
 
-bool WriteMemoryBuffer(MemoryBuffer *memoryBuffer, const unsigned char *data, size_t dataLength);
+bool WriteMemoryBuffer(MemoryBuffer *memoryBuffer, const char *data, size_t dataLength);
 void FlushMemoryBufferToFile(MemoryBuffer *buffer, FILE *file);
 void MemoryBufferDestructor(MemoryBuffer *mb);
 
