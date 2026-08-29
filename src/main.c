@@ -820,14 +820,13 @@ int main(void)
         PushCleanupStack(cleanupStack, Wrap_vips_shutdown, NULL);   // (19 глобально +1 локально ->20)
 
         fprintf(logFile, "[DEBUG] Started transfer cycle...\n");
+            wchar_t uriBuffer[URI_MAX_LENGTH];
         int runningHandles; //склько запросов ещё НЕ завершились
         size_t pagesResponses = 0, successfulPagesResponses = 0, faviconResponses = 0, successfulFaviconResponses = 0;
         size_t replacedIcons = 0, newIcons = 0;
         size_t successfulyUpdatedIcons = 0;
         do
         {
-            wchar_t uriBuffer[URI_MAX_LENGTH];
-
             if(curl_multi_perform(iconsProcessContainer.multi, &runningHandles) != CURLM_OK)
             {
                 FatalError("Failed to perform active transfers. curl_multi_perform() failed.");

@@ -2,5 +2,6 @@ build/*
 logs/*
 debug/*
 response/*
-resources/*
+resources/icons*
+resources/temp*
 bin/*
