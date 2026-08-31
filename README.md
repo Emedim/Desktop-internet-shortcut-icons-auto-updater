@@ -1,51 +1,90 @@
 # Desktop Internet Shortcut Icons Auto Updater
 
-Утилита для Windows, которая автоматически обновляет иконки интернет-ярлыков на рабочем столе. 
+A Windows utility that automatically updates icons of web shortcuts located on the desktop.
 
-Пользователи Windows, которые активно используют ярлыки сайтов, могут столкнуться с проблемой: множество ярлыков имеют одинаковые стандартные иконки браузера и отличаются только названием. Данная программа решает эту проблему, заменяя стандартные изображения ярлыков на иконки, соответствующие сайтам, на которые они ведут.
+Windows users who actively use website shortcuts may encounter a problem: many shortcuts have the same default browser icon and differ only by their names. This program solves this issue by replacing default shortcut images with icons corresponding to the websites they point to.
 
-## Пример работы
+## Example
 
-### До использования программы
+### Before using the program
 
-![До](resources/screenshots/до.png)
+![Before](resources/screenshots/до.png)
 
-### После использования программы
+### After using the program
 
-![После](resources/screenshots/после.png)
-
-
-## Использование
-
-После запуска программы появится меню с доступными режимами.
-
-![Меню](resources/screenshots/меню.png)
-
-### 1. Обновление иконок
+![After](resources/screenshots/после.png)
 
 
-Первый режим скачивает и устанавливает иконки для интернет-ярлыков, находящихся на рабочем столе.
+## Usage
 
-В зависимости от скорости интернет-соединения, времени ответа сайтов и количества интернет-ярлыков процесс может занять до нескольких минут.
+After launching the program, a menu with available modes will appear.
 
-Не все ярлыки могут быть обновлены с первого раза, поскольку некоторые сайты могут не отвечать на запросы программы. Если после завершения работы некоторые ярлыки остались без новых иконок, можно повторить попытку. Также можно попробовать выполнить обновление позже.
+![Menu](resources/screenshots/меню.png)
 
-### 2. Восстановление стандартных иконок
+### 1. Update icons
 
-Второй режим восстанавливает стандартные иконки интернет-ярлыков.
+The first mode downloads and assigns icons to web shortcuts located on the desktop.
 
-Этот режим следует использовать, если вы хотите отказаться от использования программы, если некоторые ярлыки отображаются некорректно или если необходимо удалить утилиту.
+Depending on the internet connection speed, website response times, and the number of web shortcuts, the process may take several minutes.
 
-После восстановления стандартных иконок программу можно удалить.
+Not all shortcuts may be updated successfully on the first attempt, as some websites may not respond to the program's requests. If some shortcuts remain without new icons after completion, you can try again. You can also retry the update later.
 
-## Важная информация
+This mode requires an internet connection.
 
-После обновления иконок не рекомендуется сразу удалять или перемещать программу.
+### 2. Restore default icons
 
-Скачанные иконки хранятся непосредственно в папке утилиты, а ярлыки сохраняют пути к этим файлам. Если удалить программу или переместить её в другое место, Windows больше не сможет найти сохранённые иконки. В результате вместо них могут отображаться стандартные изображения, обозначающие отсутствующую иконку.
+The second mode restores the default icons of web shortcuts.
 
-Поэтому перед первым запуском рекомендуется выбрать постоянное место для утилиты.
+This mode should be used if you want to stop using the program, if some shortcuts are displayed incorrectly, or if you want to remove the utility.
 
-Если программу всё же необходимо переместить, после перемещения можно повторно запустить первый режим — иконки будут загружены заново с учётом нового расположения программы.
+After restoring the default icons, the program can be safely deleted.
 
-Если вы хотите полностью удалить программу, сначала запустите второй режим и восстановите стандартные иконки. После этого утилиту можно удалить без риска оставить в ярлыках пути к несуществующим файлам.
+## Important information
+
+After updating icons, it is not recommended to immediately delete or move the program.
+
+Downloaded icons are stored directly inside the utility folder, and shortcuts keep paths to these files. If the program is deleted or moved to another location, Windows will no longer be able to find the stored icons. As a result, default missing-icon images may be displayed instead.
+
+Therefore, it is recommended to choose a permanent location for the utility before the first launch.
+
+If the program needs to be moved, you can run the first mode again after moving it. The icons will be downloaded again using the new program location.
+
+If you want to completely remove the program, first run the second mode and restore the default icons. After that, the utility can be deleted without leaving shortcuts pointing to non-existent files.
+
+## System requirements
+
+The only requirement:
+
+* Windows 11
+
+## Installation and launch
+
+No installation is required.
+
+Download the latest build of the program from the [Releases](https://github.com/Emedim/Desktop-internet-shortcut-icons-auto-updater/releases/) section and extract the archive to a convenient location.
+
+To launch the program, open the `bin` folder and run `DISIAU.exe` by double-clicking it.
+
+After launch, a menu with available operation modes will appear.
+
+## Limitations and known issues
+
+The program does not guarantee successful icon updates for all web shortcuts.
+
+Some websites may not provide the required data or may refuse to process requests from the program. In such cases, the corresponding shortcut icon will not be updated, and the default icon will remain unchanged.
+
+Some websites may also specify an incorrect type of downloaded image. As a result, the program may save the received data in a format that Windows cannot use as an icon. In this case, a default blank-file icon may be displayed instead of the website icon.
+
+![Problematic icons](resources/screenshots/проблемные-иконки.png)
+
+## License
+
+This project is licensed under the MIT License.
+
+Copyright (c) 2026 Andrey Melnikov
+
+## Third-party components
+
+This project uses third-party libraries distributed under their own licenses.
+
+See `THIRD-PARTY-NOTICES.txt` for details.
