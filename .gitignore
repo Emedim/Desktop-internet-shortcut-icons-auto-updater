@@ -5,3 +5,4 @@ response/*
 resources/icons*
 resources/temp*
 bin/*
+releases/*
